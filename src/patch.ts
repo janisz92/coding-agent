@@ -56,3 +56,15 @@ export function cleanupPatchFile(patchPath: string) {
     /* ignore */
   }
 }
+
+export function checkPatch(repoRoot: string, patchPath: string): void {
+  const res = spawnSync("git", ["apply", "--check", patchPath], {
+    cwd: repoRoot,
+    shell: false,
+    encoding: "utf8",
+  });
+
+  if (res.status !== 0) {
+    throw new Error(`git apply --check failed:\n${res.stdout}\n${res.stderr}`);
+  }
+}

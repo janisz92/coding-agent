@@ -3,8 +3,8 @@ import path from "node:path";
 import fs from "node:fs";
 
 import { generateText } from "./openai.ts";
-import { buildPatchPrompt, buildReviewPrompt } from "./prompts.ts";
-import { parsePatch, savePatch, applyPatch, cleanupPatchFile } from "./patch.ts";
+import { buildPatchPrompt, buildPatchRepairPrompt, buildReviewPrompt, buildGitApplyRepairPrompt } from "./prompts.ts";
+import { parsePatch, savePatch, applyPatch, cleanupPatchFile, checkPatch   } from "./patch.ts";
 import { ensureGitRepo, nameStatus, stat, diff as gitDiff } from "./git.ts";
 import { listFiles, pickContextFiles, readFile, repoMap } from "./repo.ts";
 
@@ -73,17 +73,67 @@ Użycie:
   });
 
   console.log("[agent] Working...");
-  const output = await generateText(prompt);
+const output = await generateText(prompt);
 
-  const rawPath = path.join(repoRoot, "agent.raw.txt");
-  fs.writeFileSync(rawPath, output, "utf8");
-  console.log("[agent] Saved raw model output:", rawPath);
+// zapis surowego outputu zawsze
+const rawPath = path.join(repoRoot, "agent.raw.txt");
+fs.writeFileSync(rawPath, output, "utf8");
 
-  const patch = parsePatch(output);
-  const patchPath = savePatch(repoRoot, patch);
+let patch: string;
 
-  applyPatch(repoRoot, patchPath);
-  cleanupPatchFile(patchPath);
+try {
+  patch = parsePatch(output);
+} catch (e: any) {
+  const errMsg = e?.message ?? String(e);
+  console.log("[agent] Patch invalid, trying repair...");
+
+  const repairPrompt = buildPatchRepairPrompt({
+    repoRoot,
+    task,
+    rawModelOutput: output,
+    errorMessage: errMsg,
+  });
+
+  const repaired = await generateText(repairPrompt);
+
+  const rawFixPath = path.join(repoRoot, "agent.raw.fix.txt");
+  fs.writeFileSync(rawFixPath, repaired, "utf8");
+  console.log("[agent] Saved repaired raw output:", rawFixPath);
+
+  patch = parsePatch(repaired);
+}
+
+let patchPath = savePatch(repoRoot, patch);
+
+try {
+  checkPatch(repoRoot, patchPath);
+} catch (e: any) {
+  const gitErr = e?.message ?? String(e);
+  console.log("[agent] git apply --check failed, trying to repair patch...");
+
+  const badPatch = fs.readFileSync(patchPath, "utf8");
+
+  const repairPrompt = buildGitApplyRepairPrompt({
+    repoRoot,
+    task,
+    badPatch,
+    gitError: gitErr,
+  });
+
+  const repaired = await generateText(repairPrompt);
+
+  const rawFix2Path = path.join(repoRoot, "agent.raw.fix2.txt");
+  fs.writeFileSync(rawFix2Path, repaired, "utf8");
+  console.log("[agent] Saved git-repaired output:", rawFix2Path);
+
+  const repairedPatch = parsePatch(repaired);
+
+  patchPath = savePatch(repoRoot, repairedPatch);
+  checkPatch(repoRoot, patchPath);
+}
+
+applyPatch(repoRoot, patchPath);
+cleanupPatchFile(patchPath);
 
   console.log("\n[agent] Zastosowano zmiany.");
   console.log("\nPliki:");
