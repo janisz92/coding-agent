@@ -33,7 +33,7 @@ function nowIso() {
 }
 
 function safeGitDiff(repoRoot: string): { ok: boolean; diff?: string; error?: string } {
-  // Jedyna “komenda systemowa” jaką wykonujemy: git diff
+  // Jedyna “komesdsdnda systemowa” jaką wykonujemy: git diff
   const res = spawnSync("git", ["diff"], {
     cwd: repoRoot,
     shell: false,
@@ -47,8 +47,8 @@ function safeGitDiff(repoRoot: string): { ok: boolean; diff?: string; error?: st
 }
 
 function buildSystemPrompt(repoRoot: string) {
-  // Zawsze wczytuj prompt z pliku: resources/promts/codeAgentPromt.txt (relatywnie do repoRoot)
-  const promptPath = path.join(repoRoot, "resources", "promts", "codeAgentPromt.txt");
+  // Zawsze wczytuj prompt z pliku: resources/prompts/codeAgentPromt.txt (relatywnie do repoRoot)
+  const promptPath = path.join(repoRoot, "resources", "prompts", "codeAgentPromt.txt");
   if (!fs.existsSync(promptPath)) {
     throw new Error(`Brak pliku promptu: ${promptPath}`);
   }
