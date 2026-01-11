@@ -57,7 +57,7 @@ Agent działa na podstawie tool-calling i udostępnia następujące narzędzia (
 - diff_file_against_original: prosty unified diff aktualnej zawartości względem snapshotu,
 - apply_patch: zastosowanie prostego unified patcha (bez nagłówków hunk) do jednego lub wielu plików.
 
-Snapshot zapisywany jest w pliku .agent_baseline.json w katalogu repo i obejmuje zawartości plików nie większych niż maxReadBytes (domyślnie 400 kB). Dla większych plików porównanie odbywa się po rozmiarze.
+Snapshot jest przechowywany poza repozytorium: w katalogu systemowym tymczasowym os.tmpdir()/coding-agent-baselines/<sha256(realRepoAbs)>/baseline.json i obejmuje zawartości plików nie większych niż maxReadBytes (domyślnie 400 kB). Dla większych plików porównanie odbywa się po rozmiarze.
 
 ## Sandbox i bezpieczeństwo
 Konfiguracja sandboxa znajduje się w src/agent/security.ts i jest stosowana m.in. przez RepoTools:
@@ -92,7 +92,7 @@ npm test
 ```
 
 ## Jak robić review zmian (code review z użyciem narzędzi)
-Agent automatycznie tworzy snapshot bazowy repozytorium na starcie (plik .agent_baseline.json). Na jego podstawie dostępne są narzędzia do przeglądu zmian:
+Agent automatycznie tworzy snapshot bazowy repozytorium na starcie (przechowywany poza repo – patrz wyżej). Na jego podstawie dostępne są narzędzia do przeglądu zmian:
 - get_baseline_info – sprawdzenie informacji o snapshotcie,
 - list_changed_files – lista plików added/modified/deleted względem snapshotu,
 - diff_file_against_original – unified diff oraz podsumowanie (ile linii dodano/usunięto),

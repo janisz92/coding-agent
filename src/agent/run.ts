@@ -1,5 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 import { openai } from "../openai.ts";
@@ -62,11 +64,16 @@ function buildSystemPrompt(repoRoot: string) {
 
 /**
  * Tworzy snapshot bazowy repozytorium na potrzeby review.
- * Zapisuje .agent_baseline.json w katalogu głównym repo.
+ * Zapisuje baseline.json w katalogu cache systemowego: os.tmpdir()/coding-agent-baselines/<sha256(repoAbs)>/baseline.json.
  */
-function createBaseline(opts: SandboxOptions): { path: string; files: number } {
-  const repoRoot = path.resolve(opts.repoRoot);
-  const baselinePath = path.join(repoRoot, ".agent_baseline.json");
+export function createBaseline(opts: SandboxOptions): { path: string; files: number } {
+  const repoAbs = fs.realpathSync(path.resolve(opts.repoRoot));
+  const hash = crypto.createHash("sha256").update(repoAbs, "utf8").digest("hex");
+  const cacheDir = path.join(os.tmpdir(), "coding-agent-baselines", hash);
+  const baselinePath = path.join(cacheDir, "baseline.json");
+
+  // Ensure dir exists
+  fs.mkdirSync(cacheDir, { recursive: true });
 
   const files = listFilesRecursive(opts, 5000);
   const data: any = {
@@ -77,7 +84,7 @@ function createBaseline(opts: SandboxOptions): { path: string; files: number } {
 
   for (const rel of files) {
     try {
-      const abs = path.join(repoRoot, rel.replaceAll("/", path.sep));
+      const abs = path.join(repoAbs, rel.replaceAll("/", path.sep));
       const st = fs.statSync(abs);
       if (!st.isFile()) continue;
       if (st.size <= opts.maxReadBytes) {
@@ -114,15 +121,17 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
 
   const sandbox = defaultSandboxOptions(repoRoot);
 
-  // Utwórz snapshot bazowy dla funkcji review
+  // Utwórz snapshot bazowy dla funkcji review (poza repo)
+  let baselinePath: string | undefined;
   try {
     const b = createBaseline(sandbox);
+    baselinePath = b.path;
     logger.appendJSON({ type: "baseline_created", at: nowIso(), path: b.path, files: b.files });
   } catch (e: any) {
     logger.appendJSON({ type: "baseline_error", at: nowIso(), error: e?.message ?? String(e) });
   }
 
-  const tools = new RepoTools(sandbox);
+  const tools = new RepoTools({ ...(sandbox as any), baselinePath } as any);
 
   logger.appendJSON({ type: "model_request", at: nowIso(), model, phase: "initial" });
 

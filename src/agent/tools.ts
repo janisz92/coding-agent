@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import crypto from "node:crypto";
 import {
   SandboxOptions,
@@ -31,7 +32,6 @@ export type ToolResult = {
   error?: string;
 };
 
-const BASELINE_FILENAME = ".agent_baseline.json";
 const LCS_MAX_TOTAL_LINES = 10000; // hard limit for LCS-based diff
 
 export class RepoTools {
@@ -343,8 +343,44 @@ export class RepoTools {
     return { query, matches, scanned_files: all.length };
   }
 
-  private baselinePath(): string {
-    return path.join(this.opts.repoRoot, BASELINE_FILENAME);
+  private getBaselinePath(): string {
+    const anyOpts: any = this.opts as any;
+    const cfgPath: string | undefined = anyOpts.baselinePath;
+    if (!cfgPath) {
+      throw new Error("Baseline snapshot not found. It should be created automatically at agent start.");
+    }
+
+    const repoAbs = fs.realpathSync(path.resolve(this.opts.repoRoot));
+    const candidateAbs = path.resolve(cfgPath);
+
+    let realCandidateAbs: string;
+    try {
+      realCandidateAbs = fs.realpathSync(candidateAbs);
+    } catch {
+      const parent = path.dirname(candidateAbs);
+      let realParent: string;
+      try {
+        realParent = fs.realpathSync(parent);
+      } catch {
+        throw new Error("Baseline snapshot not found. It should be created automatically at agent start.");
+      }
+      realCandidateAbs = path.join(realParent, path.basename(candidateAbs));
+    }
+
+    // Must NOT be inside the repo
+    const mustNotStart = repoAbs + path.sep;
+    if (realCandidateAbs.startsWith(mustNotStart)) {
+      throw new Error("Invalid baseline location: must not be inside the repository.");
+    }
+
+    // Must be inside cache dir under os.tmpdir()/coding-agent-baselines
+    const tmpRoot = fs.realpathSync(os.tmpdir());
+    const cacheRoot = path.join(tmpRoot, "coding-agent-baselines") + path.sep;
+    if (!realCandidateAbs.startsWith(cacheRoot)) {
+      throw new Error("Invalid baseline location: must be inside the agent cache directory.");
+    }
+
+    return candidateAbs;
   }
 
   private loadBaseline(): {
@@ -352,7 +388,7 @@ export class RepoTools {
     maxReadBytes: number;
     files: Record<string, { bytes: number; content: string | null }>;
   } {
-    const p = this.baselinePath();
+    const p = this.getBaselinePath();
     if (!fs.existsSync(p)) {
       throw new Error("Baseline snapshot not found. It should be created automatically at agent start.");
     }

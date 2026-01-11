@@ -20,7 +20,6 @@ build/
 
 agent.raw.txt
 agent.diff.txt
-.agent_baseline.json
 
 # =====================
 # OS / editor junk

@@ -8,6 +8,8 @@ export type SandboxOptions = {
   denyExtensions: string[]; // np. [".pem", ".key"]
   maxReadBytes: number; // np. 400_000
   maxWriteBytes: number; // np. 800_000
+  // Ścieżka do pliku snapshotu baseline (poza repo), przekazywana do RepoTools przez run.ts
+  baselinePath?: string;
 };
 
 export type SafePathResult = {
