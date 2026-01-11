@@ -556,10 +556,17 @@ export class RepoTools {
     for (const p of currentFiles) {
       if (!baselineSet.has(p)) continue;
       if (!filt(p)) continue;
-      const abs = path.resolve(this.opts.repoRoot, p.replaceAll("/", path.sep));
+      // Resolve safely within the repo (guards against symlink/path traversal)
+      let absPath: string;
+      try {
+        ({ absPath } = resolveInRepo(this.opts, p));
+      } catch {
+        // Skip files that cannot be safely resolved
+        continue;
+      }
       let st: fs.Stats;
       try {
-        st = fs.statSync(abs);
+        st = fs.statSync(absPath);
       } catch {
         continue;
       }
@@ -569,7 +576,7 @@ export class RepoTools {
         modified.push(p);
       } else if (base.content != null && st.size <= this.opts.maxReadBytes) {
         try {
-          const currentContent = fs.readFileSync(abs, "utf8");
+          const currentContent = fs.readFileSync(absPath, "utf8");
           if (currentContent !== base.content) modified.push(p);
         } catch {}
       }
