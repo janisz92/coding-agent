@@ -51,7 +51,13 @@ Agent działa na podstawie tool-calling i udostępnia następujące narzędzia (
 - read_file: odczyt pliku tekstowego,
 - write_file: zapis/utworzenie pliku (wymaga podania pełnej nowej treści),
 - delete_file: usunięcie pliku,
-- search_in_files: proste wyszukiwanie podciągów w plikach.
+- search_in_files: proste wyszukiwanie podciągów w plikach,
+- get_baseline_info: metadane snapshotu stanu początkowego repo (tworzony automatycznie na starcie agenta),
+- list_changed_files: lista plików dodanych/zmodyfikowanych/usuniętych względem snapshotu,
+- read_file_original: odczyt wersji pliku ze snapshotu (oryginał),
+- diff_file_against_original: prosty unified diff aktualnej zawartości względem snapshotu.
+
+Snapshot zapisywany jest w pliku .agent_baseline.json w katalogu repo i obejmuje zawartości plików nie większych niż maxReadBytes (domyślnie 400 kB). Dla większych plików porównanie odbywa się po rozmiarze.
 
 ## Sandbox i bezpieczeństwo
 Konfiguracja sandboxa znajduje się w src/agent/security.ts i jest stosowana m.in. przez RepoTools:
@@ -67,7 +73,7 @@ Dodatkowo, po zakończeniu pętli agent próbuje wykonać git diff (jedyna komen
 - src/cli.ts – wejściowy CLI, parsowanie argumentów, uruchomienie agenta.
 - src/openai.ts – inicjalizacja minimalnego klienta OpenAI (wymaga OPENAI_API_KEY).
 - src/agent/run.ts – pętla agenta, integracja z OpenAI Responses API, logowanie, generowanie diffu.
-- src/agent/tools.ts – implementacja narzędzi (listowanie/odczyt/zapis/usuwanie/wyszukiwanie plików).
+- src/agent/tools.ts – implementacja narzędzi (listowanie/odczyt/zapis/usuwanie/wyszukiwanie plików i narzędzia do review).
 - src/agent/security.ts – izolacja repo, denylista ścieżek, limity, bezpieczne rozwiązywanie ścieżek.
 - src/agent/log.ts – prosty logger (agent.raw.txt, agent.diff.txt).
 - tests/security.test.ts – testy bezpieczeństwa warstwy ścieżek i denylis (node:test).

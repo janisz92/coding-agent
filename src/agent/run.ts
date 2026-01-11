@@ -1,10 +1,11 @@
 import path from "node:path";
+import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 
 import { openai } from "../openai.ts";
 import { AgentLogger } from "./log.ts";
 import { RepoTools } from "./tools.ts";
-import { SandboxOptions } from "./security.ts";
+import { SandboxOptions, listFilesRecursive } from "./security.ts";
 
 /**
  * Konfiguracja bezpieczeństwa repo sandbox.
@@ -63,6 +64,41 @@ function buildSystemPrompt() {
 }
 
 /**
+ * Tworzy snapshot bazowy repozytorium na potrzeby review.
+ * Zapisuje .agent_baseline.json w katalogu głównym repo.
+ */
+function createBaseline(opts: SandboxOptions): { path: string; files: number } {
+  const repoRoot = path.resolve(opts.repoRoot);
+  const baselinePath = path.join(repoRoot, ".agent_baseline.json");
+
+  const files = listFilesRecursive(opts, 5000);
+  const data: any = {
+    createdAt: nowIso(),
+    maxReadBytes: opts.maxReadBytes,
+    files: {} as Record<string, { bytes: number; content: string | null }>,
+  };
+
+  for (const rel of files) {
+    try {
+      const abs = path.join(repoRoot, rel.replaceAll("/", path.sep));
+      const st = fs.statSync(abs);
+      if (!st.isFile()) continue;
+      if (st.size <= opts.maxReadBytes) {
+        const content = fs.readFileSync(abs, "utf8");
+        data.files[rel] = { bytes: st.size, content };
+      } else {
+        data.files[rel] = { bytes: st.size, content: null };
+      }
+    } catch {
+      // pomiń pliki, których nie da się odczytać
+    }
+  }
+
+  fs.writeFileSync(baselinePath, JSON.stringify(data, null, 2), "utf8");
+  return { path: baselinePath, files: Object.keys(data.files).length };
+}
+
+/**
  * Agent loop z tool calling.
  *
  * WAŻNE:
@@ -79,7 +115,17 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
   const logger = new AgentLogger(repoRoot);
   logger.initNewRun({ task, model, startedAt: nowIso() });
 
-  const tools = new RepoTools(defaultSandboxOptions(repoRoot));
+  const sandbox = defaultSandboxOptions(repoRoot);
+
+  // Utwórz snapshot bazowy dla funkcji review
+  try {
+    const b = createBaseline(sandbox);
+    logger.appendJSON({ type: "baseline_created", at: nowIso(), path: b.path, files: b.files });
+  } catch (e: any) {
+    logger.appendJSON({ type: "baseline_error", at: nowIso(), error: e?.message ?? String(e) });
+  }
+
+  const tools = new RepoTools(sandbox);
 
   logger.appendJSON({ type: "model_request", at: nowIso(), model, phase: "initial" });
 

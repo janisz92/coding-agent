@@ -12,7 +12,11 @@ export type ToolName =
   | "read_file"
   | "write_file"
   | "delete_file"
-  | "search_in_files";
+  | "search_in_files"
+  | "get_baseline_info"
+  | "list_changed_files"
+  | "read_file_original"
+  | "diff_file_against_original";
 
 export type ToolCall = {
   name: ToolName;
@@ -24,6 +28,8 @@ export type ToolResult = {
   result?: any;
   error?: string;
 };
+
+const BASELINE_FILENAME = ".agent_baseline.json";
 
 export class RepoTools {
   constructor(private readonly opts: SandboxOptions) {}
@@ -115,6 +121,56 @@ export class RepoTools {
           required: ["query"],
         },
       },
+      {
+        type: "function",
+        name: "get_baseline_info",
+        description:
+          "Get metadata about the initial repository snapshot used for review (created at agent start).",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+      },
+      {
+        type: "function",
+        name: "list_changed_files",
+        description:
+          "List added/modified/deleted files compared to the baseline snapshot (created at agent start).",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            prefix: { type: "string", description: "Optional path prefix filter, e.g. 'src/'." },
+            limit: { type: "integer", minimum: 1, maximum: 5000 },
+          },
+        },
+      },
+      {
+        type: "function",
+        name: "read_file_original",
+        description:
+          "Read file content from the baseline snapshot (original version at agent start).",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            path: { type: "string", description: "Relative path inside repo." },
+          },
+          required: ["path"],
+        },
+      },
+      {
+        type: "function",
+        name: "diff_file_against_original",
+        description:
+          "Compute a simple unified diff between current file content and the baseline (original). Returns summary and diff text.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            path: { type: "string", description: "Relative path inside repo." },
+            max_lines: { type: "integer", description: "Max diff lines to include in output (default 2000).", minimum: 1, maximum: 10000 },
+          },
+          required: ["path"],
+        },
+      },
     ] as const;
   }
 
@@ -131,6 +187,14 @@ export class RepoTools {
           return { ok: true, result: this.deleteFile(call.arguments) };
         case "search_in_files":
           return { ok: true, result: this.searchInFiles(call.arguments) };
+        case "get_baseline_info":
+          return { ok: true, result: this.getBaselineInfo() };
+        case "list_changed_files":
+          return { ok: true, result: this.listChangedFiles(call.arguments) };
+        case "read_file_original":
+          return { ok: true, result: this.readFileOriginal(call.arguments) };
+        case "diff_file_against_original":
+          return { ok: true, result: this.diffFileAgainstOriginal(call.arguments) };
         default:
           return { ok: false, error: `Unknown tool: ${(call as any).name}` };
       }
@@ -238,5 +302,252 @@ export class RepoTools {
     }
 
     return { query, matches, scanned_files: all.length };
+  }
+
+  private baselinePath(): string {
+    return path.join(this.opts.repoRoot, BASELINE_FILENAME);
+  }
+
+  private loadBaseline(): {
+    createdAt: string;
+    maxReadBytes: number;
+    files: Record<string, { bytes: number; content: string | null }>;
+  } {
+    const p = this.baselinePath();
+    if (!fs.existsSync(p)) {
+      throw new Error("Baseline snapshot not found. It should be created automatically at agent start.");
+    }
+    const raw = fs.readFileSync(p, "utf8");
+    let json: any;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      throw new Error("Invalid baseline file JSON.");
+    }
+    if (!json || typeof json !== "object" || !json.files) {
+      throw new Error("Invalid baseline format.");
+    }
+    return json;
+  }
+
+  private getBaselineInfo() {
+    const b = this.loadBaseline();
+    const count = Object.keys(b.files).length;
+    return { created_at: b.createdAt, files: count, maxReadBytes: b.maxReadBytes };
+  }
+
+  private listChangedFiles(args: { prefix?: string; limit?: number }) {
+    const b = this.loadBaseline();
+    const baselineFiles = Object.keys(b.files);
+    const currentFiles = listFilesRecursive(this.opts, 5000);
+
+    const prefix = (args.prefix ?? "").trim();
+    const filt = (p: string) => (prefix ? p.startsWith(prefix) : true);
+
+    const baselineSet = new Set(baselineFiles);
+    const currentSet = new Set(currentFiles);
+
+    const added = currentFiles.filter((p) => !baselineSet.has(p) && filt(p));
+    const deleted = baselineFiles.filter((p) => !currentSet.has(p) && filt(p));
+
+    const modified: string[] = [];
+    for (const p of currentFiles) {
+      if (!baselineSet.has(p)) continue;
+      if (!filt(p)) continue;
+      const abs = path.resolve(this.opts.repoRoot, p.replaceAll("/", path.sep));
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(abs);
+      } catch {
+        continue;
+      }
+      const base = b.files[p];
+      if (!base) continue;
+      if (st.size !== base.bytes) {
+        modified.push(p);
+      } else if (base.content != null && st.size <= this.opts.maxReadBytes) {
+        try {
+          const currentContent = fs.readFileSync(abs, "utf8");
+          if (currentContent !== base.content) modified.push(p);
+        } catch {}
+      }
+    }
+
+    const limit = Math.min(Math.max(args.limit ?? 2000, 1), 5000);
+    return {
+      baseline_files: baselineFiles.length,
+      current_files: currentFiles.length,
+      added: added.slice(0, limit),
+      deleted: deleted.slice(0, limit),
+      modified: modified.slice(0, limit),
+    };
+  }
+
+  private readFileOriginal(args: { path: string }) {
+    const { relPath } = resolveInRepo(this.opts, args.path);
+    const b = this.loadBaseline();
+    const base = b.files[relPath];
+    if (!base) {
+      return { path: relPath, existed: false };
+    }
+    return { path: relPath, existed: true, bytes: base.bytes, content: base.content };
+  }
+
+  private diffFileAgainstOriginal(args: { path: string; max_lines?: number }) {
+    const { absPath, relPath } = resolveInRepo(this.opts, args.path);
+    const b = this.loadBaseline();
+    const base = b.files[relPath];
+
+    let currentExists = fs.existsSync(absPath) && fs.statSync(absPath).isFile();
+
+    if (!base && !currentExists) {
+      return {
+        path: relPath,
+        status: "unchanged",
+        summary: { before_bytes: 0, after_bytes: 0, added_lines: 0, removed_lines: 0 },
+        note: "File did not exist in baseline and still does not exist.",
+      };
+    }
+
+    const maxLines = Math.min(Math.max(args.max_lines ?? 2000, 1), 10000);
+
+    if (!base && currentExists) {
+      const content = this.safeRead(absPath, this.opts.maxReadBytes);
+      const lines = content.split(/\r?\n/);
+      const diff = this.buildUnifiedDiff(relPath, [], lines, maxLines);
+      return {
+        path: relPath,
+        status: "added",
+        summary: { before_bytes: 0, after_bytes: Buffer.byteLength(content, "utf8"), added_lines: lines.length, removed_lines: 0 },
+        diff_text: diff,
+      };
+    }
+
+    if (base && !currentExists) {
+      const baseLines = (base.content ?? "").split(/\r?\n/);
+      const diff = this.buildUnifiedDiff(relPath, baseLines, [], maxLines);
+      return {
+        path: relPath,
+        status: "deleted",
+        summary: { before_bytes: base.bytes, after_bytes: 0, added_lines: 0, removed_lines: baseLines.length },
+        diff_text: diff,
+      };
+    }
+
+    // both exist
+    const baseContent = base!.content;
+    if (baseContent == null) {
+      const st = fs.statSync(absPath);
+      const changed = st.size !== base!.bytes;
+      return {
+        path: relPath,
+        status: changed ? "modified" : "unchanged",
+        summary: { before_bytes: base!.bytes, after_bytes: st.size, added_lines: 0, removed_lines: 0 },
+        note: "Original file too large for content diff; compared by size only.",
+      };
+    }
+
+    const currentContent = this.safeRead(absPath, this.opts.maxReadBytes);
+    const baseLines = baseContent.split(/\r?\n/);
+    const curLines = currentContent.split(/\r?\n/);
+    const ops = this.diffLines(baseLines, curLines);
+    let added = 0;
+    let removed = 0;
+    for (const op of ops) {
+      if (op.type === "add") added += op.lines.length;
+      if (op.type === "remove") removed += op.lines.length;
+    }
+    const diff = this.buildUnifiedDiff(relPath, baseLines, curLines, maxLines, ops);
+
+    return {
+      path: relPath,
+      status: added === 0 && removed === 0 ? "unchanged" : "modified",
+      summary: {
+        before_bytes: Buffer.byteLength(baseContent, "utf8"),
+        after_bytes: Buffer.byteLength(currentContent, "utf8"),
+        added_lines: added,
+        removed_lines: removed,
+      },
+      diff_text: diff,
+    };
+  }
+
+  private safeRead(absPath: string, limit: number): string {
+    const st = fs.statSync(absPath);
+    if (st.size > limit) {
+      throw new Error(`File too large for diff (${st.size} bytes > ${limit}): ${absPath}`);
+    }
+    return fs.readFileSync(absPath, "utf8");
+  }
+
+  // Prosty LCS diff linii
+  private diffLines(a: string[], b: string[]): Array<{ type: "equal" | "add" | "remove"; lines: string[] }> {
+    const m = a.length;
+    const n = b.length;
+    const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    for (let i = m - 1; i >= 0; i--) {
+      for (let j = n - 1; j >= 0; j--) {
+        if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+        else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const ops: Array<{ type: "equal" | "add" | "remove"; lines: string[] }> = [];
+    let i = 0,
+      j = 0;
+    while (i < m && j < n) {
+      if (a[i] === b[j]) {
+        this.pushOp(ops, "equal", a[i]);
+        i++;
+        j++;
+      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+        this.pushOp(ops, "remove", a[i]);
+        i++;
+      } else {
+        this.pushOp(ops, "add", b[j]);
+        j++;
+      }
+    }
+    while (i < m) {
+      this.pushOp(ops, "remove", a[i++]);
+    }
+    while (j < n) {
+      this.pushOp(ops, "add", b[j++]);
+    }
+    return ops;
+  }
+
+  private pushOp(
+    ops: Array<{ type: "equal" | "add" | "remove"; lines: string[] }>,
+    type: "equal" | "add" | "remove",
+    line: string
+  ) {
+    const last = ops[ops.length - 1];
+    if (last && last.type === type) {
+      last.lines.push(line);
+    } else {
+      ops.push({ type, lines: [line] });
+    }
+  }
+
+  private buildUnifiedDiff(
+    relPath: string,
+    a: string[],
+    b: string[],
+    maxLines: number,
+    precomputedOps?: Array<{ type: "equal" | "add" | "remove"; lines: string[] }>
+  ): string {
+    const ops = precomputedOps ?? this.diffLines(a, b);
+    const header = [`--- a/${relPath}`, `+++ b/${relPath}`];
+    const body: string[] = [];
+    for (const op of ops) {
+      for (const line of op.lines) {
+        if (body.length >= maxLines) break;
+        if (op.type === "equal") body.push(" " + line);
+        else if (op.type === "add") body.push("+" + line);
+        else body.push("-" + line);
+      }
+      if (body.length >= maxLines) break;
+    }
+    return header.concat(body).join("\n");
   }
 }
