@@ -839,15 +839,34 @@ export class RepoTools {
         }
       }
 
+      let newContent: string;
       if (exists) {
         if (!this.readFilesThisRun.has(relPath)) {
           throw new Error(`MUST read_file before apply_patch for existing file: ${relPath}`);
         }
-        // Validate base matches current file
-        if (beforeLines.join("\n") !== baseFromPatch.join("\n")) {
-          throw new Error(
-            `Patch base does not match current content for ${relPath}. Read the file and regenerate patch.`
-          );
+        const baseStr = baseFromPatch.join("\n");
+        const curStr = beforeLines.join("\n");
+        if (curStr === baseStr) {
+          // Whole-file replacement (legacy behavior)
+          newContent = afterFromPatch.join("\n");
+        } else {
+          // Contextual mode: treat baseFromPatch as a fragment to replace.
+          const baseBlock = baseStr + "\n";
+          const afterBlock = afterFromPatch.join("\n") + "\n";
+          let count = 0;
+          let idx = 0;
+          while (true) {
+            const found = beforeContent.indexOf(baseBlock, idx);
+            if (found === -1) break;
+            count++;
+            idx = found + baseBlock.length;
+          }
+          if (count !== 1) {
+            throw new Error(
+              `Contextual patch failed for ${relPath}: expected exactly one occurrence of base block, found ${count}.`
+            );
+          }
+          newContent = beforeContent.replace(baseBlock, afterBlock);
         }
       } else {
         // For new files, base must be empty
@@ -856,9 +875,9 @@ export class RepoTools {
             `Patch for ${relPath} implies non-empty base, but file does not exist. Create file with write_file or provide correct patch.`
           );
         }
+        newContent = afterFromPatch.join("\n");
       }
 
-      const newContent = afterFromPatch.join("\n");
       const afterBytes = Buffer.byteLength(newContent, "utf8");
       if (afterBytes > this.opts.maxWriteBytes) {
         throw new Error(
