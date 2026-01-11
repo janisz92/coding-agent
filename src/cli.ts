@@ -75,6 +75,10 @@ Użycie:
   console.log("[agent] Working...");
   const output = await generateText(prompt);
 
+  const rawPath = path.join(repoRoot, "agent.raw.txt");
+  fs.writeFileSync(rawPath, output, "utf8");
+  console.log("[agent] Saved raw model output:", rawPath);
+
   const patch = parsePatch(output);
   const patchPath = savePatch(repoRoot, patch);
 
@@ -92,7 +96,7 @@ Użycie:
   console.log("➡ Ty decydujesz czy robić commit.");
 }
 
-main().catch((e) => {
-  console.error("[agent] ERROR:", e.message);
-  process.exit(1);
+main().catch((e: any) => {
+  console.error("[agent] ERROR:", e?.stack ?? e?.message ?? String(e));
+  process.exitCode = 1; 
 });
