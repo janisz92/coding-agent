@@ -36,7 +36,7 @@ function nowIso() {
 }
 
 function safeGitDiff(repoRoot: string): { ok: boolean; diff?: string; error?: string } {
-  // Jedyna komenda systemowa” jaką wykonujemy: git diff
+  // Jedyna komenda systemowa jaką wykonujemy: git diff
   const res = spawnSync("git", ["diff"], {
     cwd: repoRoot,
     shell: false,
@@ -73,7 +73,6 @@ export function createBaseline(opts: SandboxOptions): { path: string; files: num
   const cacheDir = path.join(os.tmpdir(), "coding-agent-baselines", hash);
   const baselinePath = path.join(cacheDir, "baseline.json");
 
-  // Ensure dir exists
   fs.mkdirSync(cacheDir, { recursive: true });
 
   const files = listFilesRecursive(opts, 5000);
@@ -101,6 +100,29 @@ export function createBaseline(opts: SandboxOptions): { path: string; files: num
 
   fs.writeFileSync(baselinePath, JSON.stringify(data, null, 2), "utf8");
   return { path: baselinePath, files: Object.keys(data.files).length };
+}
+
+function summarizeOutputItems(items: any[]) {
+  return items.map((it) => {
+    const out: any = { type: it?.type };
+    if (it?.type === "function_call") {
+      out.name = it?.name;
+      const arg = it?.arguments;
+      const raw = typeof arg === "string" ? arg : JSON.stringify(arg ?? {});
+      out.arguments_preview = (raw ?? "").slice(0, 200);
+    } else if (it?.type === "message") {
+      out.role = it?.role;
+      const c = it?.content ?? "";
+      out.content_preview = (typeof c === "string" ? c : JSON.stringify(c)).slice(0, 200);
+    } else if (it) {
+      out.preview = JSON.stringify(it).slice(0, 200);
+    }
+    return out;
+  });
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 /**
@@ -135,20 +157,18 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
 
   const tools = new RepoTools({ ...(sandbox as any), baselinePath } as any);
 
-  // Pomocnicze: timeout + retry dla wywołań OpenAI
-  const requestWithRetry = async (args: any, timeoutMs: number): Promise<any> => {
+  // Timeout + retry dla wywołań OpenAI
+  const requestWithRetry = async (body: any, timeoutMs: number, phase: "initial" | "followup"): Promise<any> => {
     const maxAttempts = 3;
     let lastErr: any;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), timeoutMs);
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
       try {
-        const res = await openai.responses.create({
-          ...args,
-          signal: ctrl.signal,
-        } as any);
+        // W Node SDK v4: signal idzie w 2. argumencie opcji, nie w body
+        const res = await openai.responses.create(body as any, { signal: ctrl.signal } as any);
         return res;
       } catch (e: any) {
         lastErr = e;
@@ -158,12 +178,8 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
         const name = e?.name as string | undefined;
         const msg = e?.message ? String(e.message) : "";
 
-        const isAbort =
-          name === "AbortError" ||
-          /aborted|abort/i.test(msg);
-
-        const isRetriableStatus =
-          typeof status === "number" && (status === 429 || status >= 500);
+        const isAbort = name === "AbortError" || /aborted|abort/i.test(msg);
+        const isRetriableStatus = typeof status === "number" && (status === 429 || status >= 500);
 
         const isRetriableNetwork =
           (code &&
@@ -182,24 +198,33 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
         logger.appendJSON({
           type: "openai_request_error",
           at: nowIso(),
+          phase,
           attempt,
           max_attempts: maxAttempts,
           timeout_ms: timeoutMs,
           status,
           code,
           name,
-          message: msg.slice(0, 500),
+          message: msg.slice(0, 800),
           retriable,
         });
 
         if (attempt < maxAttempts && retriable) {
-          await new Promise((r) => setTimeout(r, 250 * attempt));
+          const backoff = 250 * attempt;
+          logger.appendJSON({
+            type: "openai_request_retry",
+            at: nowIso(),
+            phase,
+            next_attempt: attempt + 1,
+            backoff_ms: backoff,
+          });
+          await sleep(backoff);
           continue;
         }
 
         throw e;
       } finally {
-        clearTimeout(to);
+        clearTimeout(timer);
       }
     }
 
@@ -209,35 +234,20 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
   logger.appendJSON({ type: "model_request", at: nowIso(), model, phase: "initial" });
 
   // Pierwsze wywołanie: system + user
-  let response = await requestWithRetry({
-    model,
-    tools: tools.getToolSpecs() as any,
-    input: [
-      { role: "system", content: buildSystemPrompt(repoRoot) },
-      { role: "user", content: task },
-    ],
-  }, 180_000);
+  let response = await requestWithRetry(
+    {
+      model,
+      tools: tools.getToolSpecs() as any,
+      input: [
+        { role: "system", content: buildSystemPrompt(repoRoot) },
+        { role: "user", content: task },
+      ],
+    },
+    180_000,
+    "initial"
+  );
 
   let toolCallsUsed = 0;
-
-  const summarizeOutputItems = (items: any[]) => {
-    return items.map((it) => {
-      const out: any = { type: it?.type };
-      if (it?.type === "function_call") {
-        out.name = it?.name;
-        const arg = it?.arguments;
-        const raw = typeof arg === "string" ? arg : JSON.stringify(arg ?? {});
-        out.arguments_preview = (raw ?? "").slice(0, 200);
-      } else if (it?.type === "message") {
-        out.role = it?.role;
-        const c = it?.content ?? "";
-        out.content_preview = (typeof c === "string" ? c : JSON.stringify(c)).slice(0, 200);
-      } else if (it) {
-        out.preview = JSON.stringify(it).slice(0, 200);
-      }
-      return out;
-    });
-  };
 
   while (true) {
     const outputItems: any[] = (response as any).output ?? [];
@@ -307,7 +317,6 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
             : String(result.result ?? "").slice(0, 5000),
       });
 
-      // Odsyłamy TYLKO output narzędzia
       nextInput.push({
         type: "function_call_output",
         call_id: callId,
@@ -324,12 +333,16 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
       followup_items: nextInput.length,
     });
 
-    response = await requestWithRetry({
-      model,
-      tools: tools.getToolSpecs() as any,
-      previous_response_id: (response as any).id,
-      input: nextInput,
-    }, 240_000);
+    response = await requestWithRetry(
+      {
+        model,
+        tools: tools.getToolSpecs() as any,
+        previous_response_id: (response as any).id,
+        input: nextInput,
+      },
+      240_000,
+      "followup"
+    );
   }
 
   // Po zakończeniu agent loop: generujemy lokalnie agent.diff.txt (bez udziału modelu)
