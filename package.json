@@ -1,25 +1,20 @@
 {
-  "name": "coding-agen",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "tsx src/cli.ts",
-    "build": "tsc",
-    "start": "node dist/cli.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "name": "coding-agent",
+  "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "test": "node --import tsx --test"
+  },
   "dependencies": {
-    "dotenv": "^17.2.3",
-    "openai": "^6.16.0"
+    "dotenv": "^16.4.5",
+    "openai": "^4.0.0"
   },
   "devDependencies": {
-    "@types/node": "^25.0.6",
-    "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "tsx": "^4.19.2",
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

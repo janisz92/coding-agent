@@ -1,0 +1,35 @@
+# =====================
+# Environment variables
+# =====================
+
+.env
+.env.*
+!.env.example
+
+# =====================
+# Node / build artifacts
+# =====================
+
+node_modules/
+dist/
+build/
+
+# =====================
+# Logs & agent artifacts
+# =====================
+
+agent.raw.txt
+agent.diff.txt
+
+# =====================
+# OS / editor junk
+# =====================
+
+.DS_Store
+Thumbs.db
+
+# =====================
+# TypeScript / tooling
+# =====================
+
+*.tsbuildinfo
