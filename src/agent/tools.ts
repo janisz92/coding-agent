@@ -381,6 +381,11 @@ export class RepoTools {
     const st = fs.statSync(absPath);
     if (!st.isFile()) throw new Error(`Not a file: ${relPath}`);
 
+    // Enforce read_file before delete for existing files
+    if (!this.readFilesThisRun.has(relPath)) {
+      throw new Error("MUST read_file before delete_file");
+    }
+
     fs.unlinkSync(absPath);
     return { path: relPath, deleted: true };
   }
@@ -839,6 +844,8 @@ export class RepoTools {
           const bLine = lines[i];
           if (bLine.startsWith(" ") || bLine.startsWith("+") || bLine.startsWith("-")) {
             body.push(bLine);
+          } else {
+            throw new Error("Invalid patch line");
           }
           i++;
         }

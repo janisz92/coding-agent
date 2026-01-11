@@ -36,7 +36,6 @@ test("apply_patch: contextual fragment replacement works", async () => {
     "+++ b/a.txt",
     "-two",
     "+TWO",
-    "",
   ].join("\n");
 
   res = await tools.dispatch({ name: "apply_patch", arguments: { patch } } as any);
@@ -63,7 +62,6 @@ test("apply_patch: two occurrences of base fragment cause error", async () => {
     "+++ b/a.txt",
     "-x",
     "+X",
-    "",
   ].join("\n");
 
   res = await tools.dispatch({ name: "apply_patch", arguments: { patch } } as any);
@@ -88,7 +86,6 @@ test("apply_patch: zero occurrences of base fragment cause error", async () => {
     "+++ b/a.txt",
     "-zzz",
     "+ZZZ",
-    "",
   ].join("\n");
 
   res = await tools.dispatch({ name: "apply_patch", arguments: { patch } } as any);
