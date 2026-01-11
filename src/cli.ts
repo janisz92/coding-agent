@@ -11,11 +11,10 @@ function getArgValue(argv: string[], name: string): string | undefined {
 function usage() {
   console.log(`
 Użycie:
-  npm run dev -- patch "<OPIS>" --repo <ścieżka>
   npm run dev -- edit "<OPIS>" --repo <ścieżka>
 
 Opis:
-  patch/edit uruchamia agentową pętlę tool-calling.
+  edit uruchamia agentową pętlę tool-calling.
   Agent czyta i zapisuje pliki bezpośrednio (bez patchy jako mechanizmu zmian),
   loguje przebieg do agent.raw.txt oraz zapisuje raport git diff do agent.diff.txt (jeśli możliwe).
 `);
@@ -32,7 +31,7 @@ async function main() {
   }
 
   const normalizedCmd = cmd.toLowerCase();
-  const isEdit = normalizedCmd === "patch" || normalizedCmd === "edit";
+  const isEdit = normalizedCmd === "edit";
 
   if (!isEdit) {
     usage();

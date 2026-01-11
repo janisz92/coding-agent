@@ -28,7 +28,6 @@ Uzupełnij w .env wartość OPENAI_API_KEY. Opcjonalnie możesz ustawić OPENAI_
 Składnia (zdefiniowana w src/cli.ts):
 
 ```
-npm run dev -- patch "<OPIS>" --repo <ścieżka>
 npm run dev -- edit  "<OPIS>" --repo <ścieżka>
 ```
 
@@ -76,8 +75,9 @@ Dodatkowo, po zakończeniu pętli agent próbuje wykonać git diff (jedyna komen
 - src/agent/tools.ts – implementacja narzędzi (listowanie/odczyt/zapis/usuwanie/wyszukiwanie plików i narzędzia do review).
 - src/agent/security.ts – izolacja repo, denylista ścieżek, limity, bezpieczne rozwiązywanie ścieżek.
 - src/agent/log.ts – prosty logger (agent.raw.txt, agent.diff.txt).
-- tests/security.test.ts – testy bezpieczeństwa warstwy ścieżek i denylis (node:test).
-- tests/tools.test.ts – plik testowy (na razie pusty, przygotowany pod rozbudowę).
+- resources/promts/codeAgentPromt.txt – prompt systemowy używany w roli system przy pierwszym wywołaniu modelu.
+- tests/security.test.ts – testy bezpieczeństwa warstwy ścieżek i denylist (node:test).
+- tests/tools.test.ts – testy narzędzi review.
 - .env.example – przykład konfiguracji środowiska (ustaw OPENAI_API_KEY przed użyciem).
 - package.json – skrypty npm i zależności.
 - tsconfig.json – konfiguracja TypeScript.
@@ -96,11 +96,11 @@ npm test
 Agent automatycznie tworzy snapshot bazowy repozytorium na starcie (plik .agent_baseline.json). Na jego podstawie dostępne są narzędzia do przeglądu zmian:
 - get_baseline_info – sprawdzenie informacji o snapshotcie,
 - list_changed_files – lista plików added/modified/deleted względem snapshotu,
-- diff_file_against_original – unified diff oraz podsumowanie (ile linii dodano/uszono),
+- diff_file_against_original – unified diff oraz podsumowanie (ile linii dodano/usunięto),
 - read_file_original – odczyt oryginalnej wersji pliku ze snapshotu (dla porównań punktowych).
 
 Przykładowa procedura przeglądu przez agenta:
-1) Uruchom agenta z odpowiednim poleceniem (tryb "edit") i poproś o przygotowanie raportu z review. Np.:
+1) Uruchom agenta poleceniem "edit" i poproś o przygotowanie raportu z review. Np.:
 
 ```
 npm run dev -- edit "Zrób code review zmian w repo. Użyj list_changed_files i diff_file_against_original do wygenerowania przeglądu; zapisz czytelne podsumowanie z rekomendacjami do pliku REVIEW.md." --repo .
@@ -122,3 +122,4 @@ Ograniczenia i uwagi dla review:
 ## Uwagi
 - Domyślny model to wartość z OPENAI_MODEL lub "gpt-5". Upewnij się, że wskazany model wspiera tool-calling i Responses API.
 - Agent minimalizuje zakres zmian i wymaga wywołania read_file przed modyfikacją jakiegokolwiek pliku.
+- Limit wywołań narzędzi w jednej sesji: domyślnie 50 (możesz zmienić w kodzie wywołania runAgent).
