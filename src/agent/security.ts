@@ -19,20 +19,25 @@ export type SafePathResult = {
  * Sprawdza denylistę na ścieżce relatywnej (POSIX).
  */
 export function isDeniedPath(opts: SandboxOptions, relPosixPath: string): boolean {
-  const p = relPosixPath.replace(/^\/+/, ""); // bez wiodących /
+  const pRaw = relPosixPath.replace(/^\/+/, ""); // bez wiodących /
+  const p = pRaw.toLowerCase();
+
+  const denyFiles = opts.denyFilesExact.map((s) => s.toLowerCase());
+  const denyExts = opts.denyExtensions.map((s) => s.toLowerCase());
+  const denyDirs = opts.denyDirs.map((s) => s.toLowerCase());
 
   // zablokuj pliki dokładne
   const base = path.posix.basename(p);
-  if (opts.denyFilesExact.includes(base)) return true;
+  if (denyFiles.includes(base)) return true;
 
   // zablokuj rozszerzenia
-  const ext = path.posix.extname(base).toLowerCase();
-  if (ext && opts.denyExtensions.map((e) => e.toLowerCase()).includes(ext)) return true;
+  const ext = path.posix.extname(base);
+  if (ext && denyExts.includes(ext)) return true;
 
   // zablokuj katalogi na dowolnym poziomie
   const segments = p.split("/");
   for (const seg of segments) {
-    if (opts.denyDirs.includes(seg)) return true;
+    if (denyDirs.includes(seg)) return true;
   }
 
   return false;
@@ -43,25 +48,60 @@ export function isDeniedPath(opts: SandboxOptions, relPosixPath: string): boolea
  * Zwraca relPath (POSIX) i absPath.
  */
 export function resolveInRepo(opts: SandboxOptions, userPath: string): SafePathResult {
-  const repoAbs = path.resolve(opts.repoRoot);
-  const candidateAbs = path.resolve(repoAbs, userPath);
+  if (typeof userPath !== "string") {
+    throw new Error("Invalid path: expected string");
+  }
+  if (userPath.includes("\u0000")) {
+    throw new Error("Invalid path: null byte");
+  }
+  const userPathTrimmed = userPath.trim();
+  if (!userPathTrimmed) {
+    throw new Error(`Invalid path: "${userPath}"`);
+  }
 
-  const relFromRepo = path.relative(repoAbs, candidateAbs);
+  const realRepoAbs = fs.realpathSync(path.resolve(opts.repoRoot));
+  const candidateAbs = path.resolve(realRepoAbs, userPathTrimmed);
 
-  // Blokada wyjścia poza repo
-  const traversal =
-    relFromRepo === "" ||
-    relFromRepo === "." ||
-    relFromRepo === ".." ||
-    relFromRepo.startsWith(".." + path.sep) ||
-    relFromRepo.includes(path.sep + ".." + path.sep);
+  // Ustal realną ścieżkę kandydata z obsługą nieistniejącego pliku
+  let realCandidateAbs: string;
+  try {
+    realCandidateAbs = fs.realpathSync(candidateAbs);
+  } catch {
+    const parent = path.dirname(candidateAbs);
+    const base = path.basename(candidateAbs);
+    let realParent: string;
+    try {
+      realParent = fs.realpathSync(parent);
+    } catch {
+      throw new Error(`Invalid path: "${userPath}"`);
+    }
+    realCandidateAbs = path.join(realParent, base);
+  }
 
-  if (traversal) {
+  // Warunek bezpieczeństwa: musi zaczynać się od realRepoAbs + path.sep
+  const mustStart = realRepoAbs + path.sep;
+  if (!realCandidateAbs.startsWith(mustStart)) {
     throw new Error(`Path traversal blocked: "${userPath}"`);
   }
 
+  // Oblicz relatywną ścieżkę na podstawie realnych ścieżek
+  const relFromRepo = path.relative(realRepoAbs, realCandidateAbs);
   const relPosix = relFromRepo.replaceAll(path.sep, "/");
+
   if (!relPosix || relPosix.trim() === "") {
+    // root repo lub pusta ścieżka
+    throw new Error(`Invalid path: "${userPath}"`);
+  }
+
+  // Zablokuj katalogi – ta funkcja zwraca ścieżki tylko do plików
+  try {
+    if (fs.existsSync(realCandidateAbs)) {
+      const st = fs.lstatSync(realCandidateAbs);
+      if (st.isDirectory()) {
+        throw new Error(`Invalid path: "${userPath}"`);
+      }
+    }
+  } catch {
     throw new Error(`Invalid path: "${userPath}"`);
   }
 
@@ -69,7 +109,7 @@ export function resolveInRepo(opts: SandboxOptions, userPath: string): SafePathR
     throw new Error(`Access denied by policy: "${relPosix}"`);
   }
 
-  return { absPath: candidateAbs, relPath: relPosix };
+  return { absPath: realCandidateAbs, relPath: relPosix };
 }
 
 export function ensureParentDirExists(fileAbsPath: string): void {
