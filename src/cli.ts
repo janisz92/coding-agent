@@ -17,6 +17,9 @@ Opis:
   edit uruchamia agentową pętlę tool-calling.
   Agent czyta i zapisuje pliki bezpośrednio (bez patchy jako mechanizmu zmian),
   loguje przebieg do agent.raw.txt oraz zapisuje raport git diff do agent.diff.txt (jeśli możliwe).
+
+Wymagania:
+  Wymaga skonfigurowanego klucza OPENAI_API_KEY (plik .env lub zmienna środowiskowa). Przykład w .env.example.
 `);
 }
 

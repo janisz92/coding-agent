@@ -52,8 +52,8 @@ Agent działa na podstawie tool-calling i udostępnia następujące narzędzia (
 - delete_file: usunięcie pliku,
 - search_in_files: proste wyszukiwanie podciągów w plikach,
 - get_baseline_info: metadane snapshotu stanu początkowego repo (tworzony automatycznie na starcie agenta),
-- list_changed_files: lista plików dodanych/zmodyfikowanych/usuniętych względem snapshotu,
-- read_file_original: odczyt wersji pliku ze snapshotu (oryginał),
+- list_changed_files: lista plików added/modified/deleted względem snapshotu,
+- read_file_original: odczyt oryginalnej wersji pliku ze snapshotu (dla porównań punktowych),
 - diff_file_against_original: prosty unified diff aktualnej zawartości względem snapshotu.
 
 Snapshot zapisywany jest w pliku .agent_baseline.json w katalogu repo i obejmuje zawartości plików nie większych niż maxReadBytes (domyślnie 400 kB). Dla większych plików porównanie odbywa się po rozmiarze.
@@ -76,8 +76,6 @@ Dodatkowo, po zakończeniu pętli agent próbuje wykonać git diff (jedyna komen
 - src/agent/security.ts – izolacja repo, denylista ścieżek, limity, bezpieczne rozwiązywanie ścieżek.
 - src/agent/log.ts – prosty logger (agent.raw.txt, agent.diff.txt).
 - resources/promts/codeAgentPromt.txt – prompt systemowy używany w roli system przy pierwszym wywołaniu modelu.
-- tests/security.test.ts – testy bezpieczeństwa warstwy ścieżek i denylist (node:test).
-- tests/tools.test.ts – testy narzędzi review.
 - .env.example – przykład konfiguracji środowiska (ustaw OPENAI_API_KEY przed użyciem).
 - package.json – skrypty npm i zależności.
 - tsconfig.json – konfiguracja TypeScript.

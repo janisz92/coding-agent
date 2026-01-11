@@ -47,7 +47,7 @@ function safeGitDiff(repoRoot: string): { ok: boolean; diff?: string; error?: st
 }
 
 function buildSystemPrompt(repoRoot: string) {
-  // Zawsze wczytuj prompt z pliku: resources/promts/system-prompt.txt (relatywnie do repoRoot)
+  // Zawsze wczytuj prompt z pliku: resources/promts/codeAgentPromt.txt (relatywnie do repoRoot)
   const promptPath = path.join(repoRoot, "resources", "promts", "codeAgentPromt.txt");
   if (!fs.existsSync(promptPath)) {
     throw new Error(`Brak pliku promptu: ${promptPath}`);
