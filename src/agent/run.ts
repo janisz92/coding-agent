@@ -6,6 +6,9 @@ import { AgentLogger } from "./log.ts";
 import { RepoTools } from "./tools.ts";
 import { SandboxOptions } from "./security.ts";
 
+/**
+ * Konfiguracja bezpieczeństwa repo sandbox.
+ */
 export function defaultSandboxOptions(repoRoot: string): SandboxOptions {
   return {
     repoRoot,
@@ -17,7 +20,7 @@ export function defaultSandboxOptions(repoRoot: string): SandboxOptions {
   };
 }
 
-type AgentRunOptions = {
+export type AgentRunOptions = {
   repoRoot: string;
   task: string;
   model?: string; // np. "gpt-5"
@@ -29,6 +32,7 @@ function nowIso() {
 }
 
 function safeGitDiff(repoRoot: string): { ok: boolean; diff?: string; error?: string } {
+  // Jedyna “komenda systemowa” jaką wykonujemy: git diff
   const res = spawnSync("git", ["diff"], {
     cwd: repoRoot,
     shell: false,
@@ -60,7 +64,11 @@ function buildSystemPrompt() {
 
 /**
  * Agent loop z tool calling.
- * Stabilny wariant: kolejne iteracje przez previous_response_id + odsyłanie function_call + function_call_output.
+ *
+ * WAŻNE:
+ * - Używamy previous_response_id, więc NIE odsyłamy function_call itemów z powrotem w input,
+ *   bo mają id (fc_...) i API zwraca 400 Duplicate item found.
+ * - Odsyłamy tylko function_call_output z call_id.
  */
 export async function runAgent(opts: AgentRunOptions): Promise<void> {
   const repoRoot = path.resolve(opts.repoRoot);
@@ -73,9 +81,9 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
 
   const tools = new RepoTools(defaultSandboxOptions(repoRoot));
 
-  // Pierwsze wywołanie: system + user
   logger.appendJSON({ type: "model_request", at: nowIso(), model, phase: "initial" });
 
+  // Pierwsze wywołanie: system + user
   let response = await openai.responses.create({
     model,
     tools: tools.getToolSpecs() as any,
@@ -88,15 +96,16 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
   let toolCallsUsed = 0;
 
   while (true) {
+    const outputItems: any[] = (response as any).output ?? [];
+
     logger.appendJSON({
       type: "model_response",
       at: nowIso(),
       id: (response as any).id,
       output_text: (response as any).output_text ?? "",
-      output: (response as any).output ?? [],
+      output: outputItems,
     });
 
-    const outputItems: any[] = (response as any).output ?? [];
     const functionCalls = outputItems.filter((it) => it?.type === "function_call");
 
     // Jeśli model nie woła narzędzi, kończymy
@@ -104,63 +113,52 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
 
     const nextInput: any[] = [];
 
-    // Dla stabilności: odsyłamy także items function_call (i ewentualne reasoning),
-    // a zaraz po nich function_call_output.
-    for (const item of outputItems) {
-      if (item?.type === "reasoning") {
-        nextInput.push(item);
+    for (const item of functionCalls) {
+      toolCallsUsed++;
+      if (toolCallsUsed > maxToolCalls) {
+        throw new Error(`Tool call limit exceeded (${maxToolCalls}).`);
       }
 
-      if (item?.type === "function_call") {
-        toolCallsUsed++;
-        if (toolCallsUsed > maxToolCalls) {
-          throw new Error(`Tool call limit exceeded (${maxToolCalls}).`);
-        }
+      const name = item.name as any;
+      const callId = item.call_id;
+      const argsRaw = item.arguments ?? "{}";
 
-        // 1) odeślij function_call
-        nextInput.push(item);
+      logger.appendJSON({
+        type: "tool_call",
+        at: nowIso(),
+        call_id: callId,
+        name,
+        arguments: argsRaw,
+      });
 
-        const name = item.name as any;
-        const callId = item.call_id;
-        const argsRaw = item.arguments ?? "{}";
-
-        logger.appendJSON({
-          type: "tool_call",
-          at: nowIso(),
-          call_id: callId,
-          name,
-          arguments: argsRaw,
-        });
-
-        let args: any = {};
-        try {
-          args = typeof argsRaw === "string" ? JSON.parse(argsRaw) : argsRaw;
-        } catch {
-          args = {};
-        }
-
-        const result = await tools.dispatch({ name, arguments: args } as any);
-
-        logger.appendJSON({
-          type: "tool_result",
-          at: nowIso(),
-          call_id: callId,
-          name,
-          ok: result.ok,
-          error: result.error,
-          result_preview:
-            result.result && typeof result.result === "object"
-              ? JSON.stringify(result.result).slice(0, 5000)
-              : String(result.result ?? "").slice(0, 5000),
-        });
-
-        // 2) odeślij output
-        nextInput.push({
-          type: "function_call_output",
-          call_id: callId,
-          output: JSON.stringify(result),
-        });
+      let args: any = {};
+      try {
+        args = typeof argsRaw === "string" ? JSON.parse(argsRaw) : argsRaw;
+      } catch {
+        args = {};
       }
+
+      const result = await tools.dispatch({ name, arguments: args } as any);
+
+      logger.appendJSON({
+        type: "tool_result",
+        at: nowIso(),
+        call_id: callId,
+        name,
+        ok: result.ok,
+        error: result.error,
+        result_preview:
+          result.result && typeof result.result === "object"
+            ? JSON.stringify(result.result).slice(0, 5000)
+            : String(result.result ?? "").slice(0, 5000),
+      });
+
+      // Odsyłamy TYLKO output narzędzia
+      nextInput.push({
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify(result),
+      });
     }
 
     logger.appendJSON({
@@ -172,7 +170,6 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
       followup_items: nextInput.length,
     });
 
-    // Kolejna iteracja: previous_response_id + “delta input”
     response = await openai.responses.create({
       model,
       tools: tools.getToolSpecs() as any,
@@ -181,7 +178,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
     });
   }
 
-  // Po zakończeniu: lokalny git diff (bez modelu)
+  // Po zakończeniu agent loop: generujemy lokalnie agent.diff.txt (bez udziału modelu)
   const diffRes = safeGitDiff(repoRoot);
   if (diffRes.ok) {
     const out = logger.saveDiffText(diffRes.diff ?? "");
