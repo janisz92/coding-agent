@@ -22,7 +22,6 @@ Opis:
 
 async function main() {
   const cmd = process.argv[2];
-  const repoRoot = path.resolve(getArgValue(process.argv, "--repo") ?? process.cwd());
 
   if (!cmd) {
     usage();
@@ -38,6 +37,19 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+
+  // Walidacja argumentu --repo pod kątem placeholderów
+  const rawRepoArg = getArgValue(process.argv, "--repo");
+  if (rawRepoArg && /[<>]/.test(rawRepoArg)) {
+    console.error(
+      "[agent] ERROR: Wykryto placeholder w argumencie --repo. Podaj prawdziwą ścieżkę do repozytorium.\n",
+    );
+    console.error("Przykład: --repo .    lub    --repo /pełna/ścieżka/do/repo");
+    process.exitCode = 1;
+    return;
+  }
+
+  const repoRoot = path.resolve(rawRepoArg ?? process.cwd());
 
   // Task to wszystko pomiędzy komendą a --repo
   const repoIdx = process.argv.indexOf("--repo");

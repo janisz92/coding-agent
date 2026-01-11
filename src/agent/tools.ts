@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import {
   SandboxOptions,
   listFilesRecursive,
@@ -30,8 +31,11 @@ export type ToolResult = {
 };
 
 const BASELINE_FILENAME = ".agent_baseline.json";
+const LCS_MAX_TOTAL_LINES = 10000; // hard limit for LCS-based diff
 
 export class RepoTools {
+  private readonly readFilesThisRun = new Set<string>();
+
   constructor(private readonly opts: SandboxOptions) {}
 
   /**
@@ -225,6 +229,7 @@ export class RepoTools {
     }
 
     const content = fs.readFileSync(absPath, "utf8");
+    this.readFilesThisRun.add(relPath);
     return { path: relPath, bytes: st.size, content };
   }
 
@@ -237,6 +242,12 @@ export class RepoTools {
       throw new Error(
         `Content too large for write_file (${bytes} bytes > ${this.opts.maxWriteBytes}): ${relPath}`
       );
+    }
+
+    // Enforce read_file before write for existing files
+    const exists = fs.existsSync(absPath);
+    if (exists && !this.readFilesThisRun.has(relPath)) {
+      throw new Error(`MUST read_file before write_file for existing file: ${relPath}`);
     }
 
     ensureParentDirExists(absPath);
@@ -447,9 +458,47 @@ export class RepoTools {
       };
     }
 
-    const currentContent = this.safeRead(absPath, this.opts.maxReadBytes);
+    // We have baseline content; decide whether to run LCS or fallback
+    const curStat = fs.statSync(absPath);
+    const afterBytes = curStat.size;
+    const canReadCurrent = afterBytes <= this.opts.maxReadBytes;
+
+    if (!canReadCurrent) {
+      // Fallback: compare by size only, and include hash for baseline
+      const beforeBytes = Buffer.byteLength(baseContent, "utf8");
+      const baseHash = crypto.createHash("sha256").update(baseContent, "utf8").digest("hex");
+      const status = beforeBytes === afterBytes ? "unchanged" : "modified";
+      const header = [`--- a/${relPath}`, `+++ b/${relPath}`, `@@ DIFF OMITTED: file too large for content read @@`].join("\n");
+      return {
+        path: relPath,
+        status,
+        summary: { before_bytes: beforeBytes, after_bytes: afterBytes, added_lines: 0, removed_lines: 0 },
+        note: `Diff omitted due to size limit. before_bytes=${beforeBytes}, after_bytes=${afterBytes}, before_sha256=${baseHash}, after_sha256=unavailable` ,
+        diff_text: header,
+      };
+    }
+
+    const currentContent = fs.readFileSync(absPath, "utf8");
     const baseLines = baseContent.split(/\r?\n/);
     const curLines = currentContent.split(/\r?\n/);
+
+    if (baseLines.length + curLines.length > LCS_MAX_TOTAL_LINES) {
+      // Fallback: fast compare using sizes and hashes
+      const beforeBytes = Buffer.byteLength(baseContent, "utf8");
+      const afterBytes2 = Buffer.byteLength(currentContent, "utf8");
+      const baseHash = crypto.createHash("sha256").update(baseContent, "utf8").digest("hex");
+      const curHash = crypto.createHash("sha256").update(currentContent, "utf8").digest("hex");
+      const modified = beforeBytes !== afterBytes2 || baseHash !== curHash;
+      const header = [`--- a/${relPath}`, `+++ b/${relPath}`, `@@ DIFF OMITTED: total line limit exceeded (${baseLines.length + curLines.length} > ${LCS_MAX_TOTAL_LINES}) @@`].join("\n");
+      return {
+        path: relPath,
+        status: modified ? "modified" : "unchanged",
+        summary: { before_bytes: beforeBytes, after_bytes: afterBytes2, added_lines: 0, removed_lines: 0 },
+        note: `Diff omitted due to line limit. before_bytes=${beforeBytes}, after_bytes=${afterBytes2}, before_sha256=${baseHash}, after_sha256=${curHash}`,
+        diff_text: header,
+      };
+    }
+
     const ops = this.diffLines(baseLines, curLines);
     let added = 0;
     let removed = 0;
