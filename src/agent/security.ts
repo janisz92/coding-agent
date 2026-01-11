@@ -125,6 +125,13 @@ export function ensureParentDirExists(fileAbsPath: string): void {
  */
 export function listFilesRecursive(opts: SandboxOptions, maxFiles = 5000): string[] {
   const repoAbs = path.resolve(opts.repoRoot);
+  // Używamy realpath repo, aby sprawdzać, że wchodzimy tylko do realnych ścieżek w repo
+  let repoRealAbs = repoAbs;
+  try {
+    repoRealAbs = fs.realpathSync(repoAbs);
+  } catch {
+    // jeśli realpath się nie powiedzie, zachowujemy repoAbs; kolejne sprawdzenia i tak będą defensywne
+  }
   const results: string[] = [];
 
   function walk(dirAbs: string) {
@@ -144,10 +151,35 @@ export function listFilesRecursive(opts: SandboxOptions, maxFiles = 5000): strin
       const rel = path.relative(repoAbs, childAbs).replaceAll(path.sep, "/");
 
       if (!rel || isDeniedPath(opts, rel)) continue;
+      // Nie polegamy na Dirent – używamy lstatSync, aby wykryć symlinki
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(childAbs);
+      } catch {
+        continue; // nieczytelny wpis – pomijamy
+      }
 
-      if (e.isDirectory()) {
+      // Pomijamy symlinki (zarówno do plików, jak i katalogów),
+      // aby uniknąć ucieczki poza repo przez dowiązania symboliczne
+      if (st.isSymbolicLink()) {
+        continue;
+      }
+
+      if (st.isDirectory()) {
+        // Przed wejściem do katalogu sprawdzamy realną ścieżkę –
+        // jeśli nie zaczyna się od realpath(repoRoot), pomijamy
+        let childReal: string;
+        try {
+          childReal = fs.realpathSync(childAbs);
+        } catch {
+          continue;
+        }
+        const mustStart = repoRealAbs + path.sep;
+        if (!childReal.startsWith(mustStart)) {
+          continue;
+        }
         walk(childAbs);
-      } else if (e.isFile()) {
+      } else if (st.isFile()) {
         results.push(rel);
       }
     }
