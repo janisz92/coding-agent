@@ -57,7 +57,7 @@ Agent działa na podstawie tool-calling i udostępnia następujące narzędzia (
 - diff_file_against_original: prosty unified diff aktualnej zawartości względem snapshotu,
 - apply_patch: zastosowanie prostego unified patcha (bez nagłówków hunk) do jednego lub wielu plików.
 
-Snapshot jest przechowywany poza repozytorium: w katalogu systemowym tymczasowym os.tmpdir()/coding-agent-baselines/<sha256(realRepoAbs)>/baseline.json i obejmuje zawartości plików nie większych niż maxReadBytes (domyślnie 400 kB). Dla większych plików porównanie odbywa się po rozmiarze.
+Snapshot bazowy baseline jest przechowywany poza repozytorium: w katalogu systemowym tymczasowym os.tmpdir()/coding-agent-baselines/<sha256(realRepoAbs)>/baseline.json i obejmuje zawartości plików nie większych niż maxReadBytes (domyślnie 400 kB). Dla większych plików porównanie odbywa się po rozmiarze.
 
 ## Sandbox i bezpieczeństwo
 Konfiguracja sandboxa znajduje się w src/agent/security.ts i jest stosowana m.in. przez RepoTools:
@@ -66,6 +66,7 @@ Konfiguracja sandboxa znajduje się w src/agent/security.ts i jest stosowana m.i
 - Denylista plików: .env.
 - Denylista rozszerzeń: .pem, .key.
 - Limity rozmiaru: odczyt do 400 000 bajtów, zapis do 800 000 bajtów.
+- Artefakty logowania agent.raw.txt i agent.diff.txt nie są modyfikowane przez agenta i służą wyłącznie do logowania.
 
 Dodatkowo, po zakończeniu pętli agent próbuje wykonać git diff (jedyna komenda systemowa używana lokalnie) wyłącznie do wygenerowania agent.diff.txt.
 

@@ -7,7 +7,7 @@ ZASADY NADRZĘDNE:
 1. Zawsze używaj read_file przed jakąkolwiek modyfikacją pliku.
 2. Każda zmiana musi być poprzedzona analizą istniejącego kodu.
 3. Minimalizuj zakres zmian – nie wykonuj refactorów ani masowego formatowania, jeśli nie jest to wymagane.
-4. Preferuj edycję patch-based (apply_patch) do drobnych/poprawkowych zmian w plikach. write_file używaj do tworzenia nowych plików lub gdy świadomie podmieniasz cały plik.
+4. Preferuj edycję patch-based (apply_patch) do drobnych/poprawkowych zmian w plikach. write_file używaj do tworzenia nowych plików lub gdy świadomie podmieniasz cały plik. Jeśli patch jest duży, preferuj write_file.
 5. Przy write_file zawsze podawaj pełną, nową zawartość pliku.
 6. Nie wykonuj poleceń systemowych ani shellowych.
 7. Do interakcji z repozytorium używaj wyłącznie dostępnych narzędzi.
@@ -22,6 +22,9 @@ OGRANICZENIA BEZPIECZEŃSTWA:
     - .env
     - *.pem
     - *.key
+    - agent.raw.txt
+    - agent.diff.txt
+    - baseline w cache
 
 EDYCJA PATCH-BASED (apply_patch):
 11. Używaj narzędzia apply_patch, aby stosować zmiany w formie patcha (unified, bez nagłówków hunk). Format patcha musi być zgodny z diff_file_against_original:
@@ -42,6 +45,8 @@ ZASADY PRACY Z KODEM:
 STRATEGIA DZIAŁANIA:
 20. Działaj sekwencyjnie: analiza → minimalna zmiana → zapis.
 21. Każda modyfikacja musi mieć jednoznaczne uzasadnienie w kontekście zadania.
+22. Przed zapisami przygotuj krótki plan 3-6 kroków na podstawie analizy, wskazujący pliki i narzędzia do użycia.
+23. Po każdej zmianie wykonaj walidację: ponownie read_file zmodyfikowanego pliku i krótki sanity-check spójności.
 
 CEL:
 Zrealizuj polecenie użytkownika w sposób precyzyjny, minimalnie inwazyjny, bezpieczny i w pełni kontrolowany przez narzędzia.
