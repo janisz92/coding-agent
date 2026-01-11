@@ -12,8 +12,10 @@ import {
 export type ToolName =
   | "list_files"
   | "read_file"
+  | "read_files_batch"
   | "write_file"
   | "delete_file"
+  | "stat_files_batch"
   | "search_in_files"
   | "get_baseline_info"
   | "list_changed_files"
@@ -82,6 +84,26 @@ export class RepoTools {
       },
       {
         type: "function",
+        name: "read_files_batch",
+        description:
+          "Read multiple text files from repo. Returns array of {path, bytes, content}. For files exceeding maxReadBytes, returns {path, bytes, content: null, note}. Denylist and size limit apply. Up to 50 paths per call.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            paths: {
+              type: "array",
+              description: "Relative paths inside repo.",
+              items: { type: "string" },
+              minItems: 1,
+              maxItems: 50,
+            },
+          },
+          required: ["paths"],
+        },
+      },
+      {
+        type: "function",
         name: "write_file",
         description:
           "Write (create/overwrite) a text file inside repo. Provide full new file content. Denylist and size limit apply.",
@@ -107,6 +129,26 @@ export class RepoTools {
             path: { type: "string", description: "Relative path inside repo." },
           },
           required: ["path"],
+        },
+      },
+      {
+        type: "function",
+        name: "stat_files_batch",
+        description:
+          "Stat multiple paths in repo. Returns array of {path, exists, is_file, bytes}. Denylist applies. Up to 200 paths per call.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            paths: {
+              type: "array",
+              description: "Relative paths inside repo.",
+              items: { type: "string" },
+              minItems: 1,
+              maxItems: 200,
+            },
+          },
+          required: ["paths"],
         },
       },
       {
@@ -200,10 +242,14 @@ export class RepoTools {
           return { ok: true, result: this.listFiles(call.arguments) };
         case "read_file":
           return { ok: true, result: this.readFile(call.arguments) };
+        case "read_files_batch":
+          return { ok: true, result: this.readFilesBatch(call.arguments) };
         case "write_file":
           return { ok: true, result: this.writeFile(call.arguments) };
         case "delete_file":
           return { ok: true, result: this.deleteFile(call.arguments) };
+        case "stat_files_batch":
+          return { ok: true, result: this.statFilesBatch(call.arguments) };
         case "search_in_files":
           return { ok: true, result: this.searchInFiles(call.arguments) };
         case "get_baseline_info":
@@ -250,6 +296,41 @@ export class RepoTools {
     return { path: relPath, bytes: st.size, content };
   }
 
+  private readFilesBatch(args: { paths: string[] }) {
+    const paths = Array.isArray(args.paths) ? args.paths : [];
+    if (paths.length === 0) throw new Error("paths is required and must be a non-empty array");
+    if (paths.length > 50) throw new Error(`Too many paths for read_files_batch (${paths.length} > 50)`);
+
+    const out: Array<{ path: string; bytes: number; content: string | null; note?: string }> = [];
+    for (const p of paths) {
+      try {
+        const { absPath, relPath } = resolveInRepo(this.opts, p);
+        let st: fs.Stats;
+        try {
+          st = fs.statSync(absPath);
+        } catch {
+          out.push({ path: relPath, bytes: 0, content: null, note: "not_found" });
+          continue;
+        }
+        if (!st.isFile()) {
+          out.push({ path: relPath, bytes: st.size ?? 0, content: null, note: "not_file" });
+          continue;
+        }
+        if (st.size > this.opts.maxReadBytes) {
+          out.push({ path: relPath, bytes: st.size, content: null, note: "too_large" });
+          continue;
+        }
+        const content = fs.readFileSync(absPath, "utf8");
+        this.readFilesThisRun.add(relPath);
+        out.push({ path: relPath, bytes: st.size, content });
+      } catch (e: any) {
+        const msg = (e?.message ?? "error").toString();
+        out.push({ path: String(p), bytes: 0, content: null, note: msg });
+      }
+    }
+    return out;
+  }
+
   private writeFile(args: { path: string; content: string }) {
     const { absPath, relPath } = resolveInRepo(this.opts, args.path);
 
@@ -283,6 +364,28 @@ export class RepoTools {
 
     fs.unlinkSync(absPath);
     return { path: relPath, deleted: true };
+  }
+
+  private statFilesBatch(args: { paths: string[] }) {
+    const paths = Array.isArray(args.paths) ? args.paths : [];
+    if (paths.length === 0) throw new Error("paths is required and must be a non-empty array");
+    if (paths.length > 200) throw new Error(`Too many paths for stat_files_batch (${paths.length} > 200)`);
+
+    const out: Array<{ path: string; exists: boolean; is_file: boolean; bytes: number }> = [];
+    for (const p of paths) {
+      try {
+        const { absPath, relPath } = resolveInRepo(this.opts, p);
+        try {
+          const st = fs.statSync(absPath);
+          out.push({ path: relPath, exists: true, is_file: st.isFile(), bytes: st.size });
+        } catch {
+          out.push({ path: relPath, exists: false, is_file: false, bytes: 0 });
+        }
+      } catch {
+        out.push({ path: String(p), exists: false, is_file: false, bytes: 0 });
+      }
+    }
+    return out;
   }
 
   private searchInFiles(args: {
