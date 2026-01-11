@@ -15,7 +15,7 @@ Użycie:
 
 Opis:
   edit uruchamia agentową pętlę tool-calling.
-  Agent czyta i zapisuje pliki bezpośrednio (bez patchy jako mechanizmu zmian),
+  Agent modyfikuje pliki bezpośrednio (write_file) lub przez patch-based edycję (apply_patch),
   loguje przebieg do agent.raw.txt oraz zapisuje raport git diff do agent.diff.txt (jeśli możliwe).
 
 Wymagania:

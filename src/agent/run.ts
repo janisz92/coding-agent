@@ -33,7 +33,7 @@ function nowIso() {
 }
 
 function safeGitDiff(repoRoot: string): { ok: boolean; diff?: string; error?: string } {
-  // Jedyna “komesdsdnda systemowa” jaką wykonujemy: git diff
+  // Jedyna komenda systemowa” jaką wykonujemy: git diff
   const res = spawnSync("git", ["diff"], {
     cwd: repoRoot,
     shell: false,

@@ -17,7 +17,8 @@ export type ToolName =
   | "get_baseline_info"
   | "list_changed_files"
   | "read_file_original"
-  | "diff_file_against_original";
+  | "diff_file_against_original"
+  | "apply_patch";
 
 export type ToolCall = {
   name: ToolName;
@@ -175,6 +176,20 @@ export class RepoTools {
           required: ["path"],
         },
       },
+      {
+        type: "function",
+        name: "apply_patch",
+        description:
+          "Apply a simple unified patch (without hunk headers) to one or more files. The format must match output of diff_file_against_original (lines starting with '--- a/', '+++ b/' followed by lines prefixed with space, '+' or '-'). Requires prior read_file for every existing file being modified.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            patch: { type: "string", description: "Unified patch text for one or more files." },
+          },
+          required: ["patch"],
+        },
+      },
     ] as const;
   }
 
@@ -199,6 +214,8 @@ export class RepoTools {
           return { ok: true, result: this.readFileOriginal(call.arguments) };
         case "diff_file_against_original":
           return { ok: true, result: this.diffFileAgainstOriginal(call.arguments) };
+        case "apply_patch":
+          return { ok: true, result: this.applyPatch(call.arguments) };
         default:
           return { ok: false, error: `Unknown tool: ${(call as any).name}` };
       }
@@ -598,5 +615,131 @@ export class RepoTools {
       if (body.length >= maxLines) break;
     }
     return header.concat(body).join("\n");
+  }
+
+  private applyPatch(args: { patch: string }) {
+    const patch = (args.patch ?? "").toString();
+    if (!patch.trim()) throw new Error("patch is required");
+
+    type FilePatch = { relPath: string; lines: string[] };
+    const sections: FilePatch[] = [];
+    const lines = patch.replace(/\r\n/g, "\n").split("\n");
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line?.startsWith("--- a/")) {
+        const next = lines[i + 1] ?? "";
+        if (!next.startsWith("+++ b/")) {
+          throw new Error("Invalid patch format: expected '+++ b/...' after '--- a/...'");
+        }
+        const pathA = line.slice(6).trim(); // after '--- a/'
+        const pathB = next.slice(6).trim(); // after '+++ b/'
+        if (!pathA || !pathB) throw new Error("Invalid patch headers: empty path");
+        // Use B path as target
+        const targetRel = pathB;
+        i += 2;
+        const body: string[] = [];
+        while (i < lines.length && !lines[i].startsWith("--- a/")) {
+          const bLine = lines[i];
+          if (bLine.startsWith(" ") || bLine.startsWith("+") || bLine.startsWith("-")) {
+            body.push(bLine);
+          }
+          i++;
+        }
+        sections.push({ relPath: targetRel, lines: body });
+      } else {
+        i++;
+      }
+    }
+
+    if (sections.length === 0) {
+      throw new Error("No file sections found in patch");
+    }
+
+    // First pass: validate and compute new contents without writing
+    const plannedWrites: Array<{
+      relPath: string;
+      absPath: string;
+      existedBefore: boolean;
+      beforeBytes: number;
+      afterBytes: number;
+      newContent: string;
+    }> = [];
+
+    for (const sec of sections) {
+      const { absPath, relPath } = resolveInRepo(this.opts, sec.relPath);
+
+      const exists = fs.existsSync(absPath) && fs.statSync(absPath).isFile();
+      const beforeContent = exists ? fs.readFileSync(absPath, "utf8") : "";
+      const beforeLines = beforeContent.split(/\r?\n/);
+
+      // Build base and after from patch body
+      const baseFromPatch: string[] = [];
+      const afterFromPatch: string[] = [];
+      for (const l of sec.lines) {
+        if (l.startsWith(" ")) {
+          const t = l.slice(1);
+          baseFromPatch.push(t);
+          afterFromPatch.push(t);
+        } else if (l.startsWith("-")) {
+          baseFromPatch.push(l.slice(1));
+        } else if (l.startsWith("+")) {
+          afterFromPatch.push(l.slice(1));
+        }
+      }
+
+      if (exists) {
+        if (!this.readFilesThisRun.has(relPath)) {
+          throw new Error(`MUST read_file before apply_patch for existing file: ${relPath}`);
+        }
+        // Validate base matches current file
+        if (beforeLines.join("\n") !== baseFromPatch.join("\n")) {
+          throw new Error(
+            `Patch base does not match current content for ${relPath}. Read the file and regenerate patch.`
+          );
+        }
+      } else {
+        // For new files, base must be empty
+        if (baseFromPatch.length > 0 && baseFromPatch.join("\n").trim() !== "") {
+          throw new Error(
+            `Patch for ${relPath} implies non-empty base, but file does not exist. Create file with write_file or provide correct patch.`
+          );
+        }
+      }
+
+      const newContent = afterFromPatch.join("\n");
+      const afterBytes = Buffer.byteLength(newContent, "utf8");
+      if (afterBytes > this.opts.maxWriteBytes) {
+        throw new Error(
+          `Resulting content too large for apply_patch (${afterBytes} bytes > ${this.opts.maxWriteBytes}): ${relPath}`
+        );
+      }
+
+      plannedWrites.push({
+        relPath,
+        absPath,
+        existedBefore: exists,
+        beforeBytes: Buffer.byteLength(beforeContent, "utf8"),
+        afterBytes,
+        newContent,
+      });
+    }
+
+    // Second pass: perform writes
+    for (const w of plannedWrites) {
+      ensureParentDirExists(w.absPath);
+      fs.writeFileSync(w.absPath, w.newContent, "utf8");
+    }
+
+    return {
+      files: plannedWrites.map((w) => ({
+        path: w.relPath,
+        existed_before: w.existedBefore,
+        before_bytes: w.beforeBytes,
+        after_bytes: w.afterBytes,
+        status: w.existedBefore ? (w.beforeBytes === w.afterBytes ? "unchanged" : "modified") : "created",
+      })),
+    };
   }
 }

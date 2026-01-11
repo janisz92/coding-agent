@@ -54,7 +54,8 @@ Agent działa na podstawie tool-calling i udostępnia następujące narzędzia (
 - get_baseline_info: metadane snapshotu stanu początkowego repo (tworzony automatycznie na starcie agenta),
 - list_changed_files: lista plików added/modified/deleted względem snapshotu,
 - read_file_original: odczyt oryginalnej wersji pliku ze snapshotu (dla porównań punktowych),
-- diff_file_against_original: prosty unified diff aktualnej zawartości względem snapshotu.
+- diff_file_against_original: prosty unified diff aktualnej zawartości względem snapshotu,
+- apply_patch: zastosowanie prostego unified patcha (bez nagłówków hunk) do jednego lub wielu plików.
 
 Snapshot zapisywany jest w pliku .agent_baseline.json w katalogu repo i obejmuje zawartości plików nie większych niż maxReadBytes (domyślnie 400 kB). Dla większych plików porównanie odbywa się po rozmiarze.
 
@@ -75,7 +76,7 @@ Dodatkowo, po zakończeniu pętli agent próbuje wykonać git diff (jedyna komen
 - src/agent/tools.ts – implementacja narzędzi (listowanie/odczyt/zapis/usuwanie/wyszukiwanie plików i narzędzia do review).
 - src/agent/security.ts – izolacja repo, denylista ścieżek, limity, bezpieczne rozwiązywanie ścieżek.
 - src/agent/log.ts – prosty logger (agent.raw.txt, agent.diff.txt).
-- resources/promts/codeAgentPromt.txt – prompt systemowy używany w roli system przy pierwszym wywołaniu modelu.
+- resources/prompts/codeAgentPromt.txt – prompt systemowy używany w roli system przy pierwszym wywołaniu modelu.
 - .env.example – przykład konfiguracji środowiska (ustaw OPENAI_API_KEY przed użyciem).
 - package.json – skrypty npm i zależności.
 - tsconfig.json – konfiguracja TypeScript.
