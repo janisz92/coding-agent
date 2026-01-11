@@ -26,6 +26,7 @@ function redactValue(val: any): any {
 
 export class AgentLogger {
   private readonly rawPath: string;
+  private readonly maxBytes: number = 20 * 1024 * 1024; // 20MB
 
   constructor(private readonly repoRoot: string) {
     // Ensure repo root exists for logs/outputs
@@ -51,19 +52,54 @@ export class AgentLogger {
   }
 
   appendLine(line: string) {
+    this.ensureRotation();
     const safe = redactString(line ?? "");
     fs.appendFileSync(this.rawPath, safe + "\n", "utf8");
+    this.ensureRotation();
   }
 
   appendJSON(obj: any) {
+    this.ensureRotation();
     const redacted = redactValue(obj);
     const line = JSON.stringify(redacted);
     fs.appendFileSync(this.rawPath, line + "\n", "utf8");
+    this.ensureRotation();
   }
 
   saveDiffText(diffText: string) {
     const outPath = path.join(this.repoRoot, "agent.diff.txt");
     fs.writeFileSync(outPath, diffText, "utf8");
     return outPath;
+  }
+
+  private ensureRotation() {
+    try {
+      const st = fs.existsSync(this.rawPath) ? fs.statSync(this.rawPath) : null;
+      if (st && st.isFile() && st.size > this.maxBytes) {
+        this.rotateLogs();
+      }
+    } catch {
+      // ignoruj błędy stat/rotacji, logowanie nie powinno przerywać działania agenta
+    }
+  }
+
+  private rotateLogs() {
+    const base = this.rawPath; // .../agent.raw.txt
+    const r1 = base.replace(/\.txt$/, ".1.txt");
+    const r2 = base.replace(/\.txt$/, ".2.txt");
+    const r3 = base.replace(/\.txt$/, ".3.txt");
+
+    try {
+      // Usuń najstarszy jeśli istnieje (>3 rotacje nie trzymamy)
+      if (fs.existsSync(r3)) fs.rmSync(r3, { force: true });
+      // Przesuń 2 -> 3, 1 -> 2, raw -> 1
+      if (fs.existsSync(r2)) fs.renameSync(r2, r3);
+      if (fs.existsSync(r1)) fs.renameSync(r1, r2);
+      if (fs.existsSync(base)) fs.renameSync(base, r1);
+      // Utwórz pusty nowy plik bazowy
+      fs.writeFileSync(base, "", "utf8");
+    } catch {
+      // Pomijamy błędy rotacji
+    }
   }
 }

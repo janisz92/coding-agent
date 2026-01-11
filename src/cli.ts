@@ -11,12 +11,16 @@ function getArgValue(argv: string[], name: string): string | undefined {
 function usage() {
   console.log(`
 Użycie:
-  npm run dev -- edit "<OPIS>" --repo <ścieżka>
+  npm run dev -- edit "<OPIS>" --repo <ścieżka> [--debug]
 
 Opis:
   edit uruchamia agentową pętlę tool-calling.
   Agent modyfikuje pliki bezpośrednio (write_file) lub przez patch-based edycję (apply_patch),
   loguje przebieg do agent.raw.txt oraz zapisuje raport git diff do agent.diff.txt (jeśli możliwe).
+
+Opcje:
+  --repo   Ścieżka do repozytorium (domyślnie bieżący katalog)
+  --debug  Włącza szczegółowe logi (pełne odpowiedzi modelu)
 
 Wymagania:
   Wymaga skonfigurowanego klucza OPENAI_API_KEY (plik .env lub zmienna środowiskowa). Przykład w .env.example.
@@ -66,8 +70,10 @@ async function main() {
     return;
   }
 
+  const debug = process.argv.includes("--debug");
+
   console.log("[agent] Working (tool-calling loop)...");
-  await runAgent({ repoRoot, task, model: process.env.OPENAI_MODEL ?? "gpt-5", maxToolCalls: 50 });
+  await runAgent({ repoRoot, task, model: process.env.OPENAI_MODEL ?? "gpt-5", maxToolCalls: 50, debug });
 
   console.log("[agent] Done.");
   console.log(`- Log: ${path.join(repoRoot, "agent.raw.txt")}`);

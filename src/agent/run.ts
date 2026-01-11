@@ -28,6 +28,7 @@ export type AgentRunOptions = {
   task: string;
   model?: string; // np. "gpt-5"
   maxToolCalls?: number; // domyślnie 50
+  debug?: boolean; // rozszerzone logi
 };
 
 function nowIso() {
@@ -115,6 +116,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
   const task = opts.task.trim();
   const model = opts.model ?? "gpt-5";
   const maxToolCalls = Math.max(1, Math.min(opts.maxToolCalls ?? 50, 50));
+  const debug = !!opts.debug;
 
   const logger = new AgentLogger(repoRoot);
   logger.initNewRun({ task, model, startedAt: nowIso() });
@@ -133,10 +135,50 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
 
   const tools = new RepoTools({ ...(sandbox as any), baselinePath } as any);
 
+  // Pomocnicze: timeout + retry dla wywołań OpenAI
+  const requestWithRetry = async (args: any): Promise<any> => {
+    const maxAttempts = 3;
+    const timeoutMs = 60_000;
+    let lastErr: any;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await (openai.responses.create as any)(args, { signal: ctrl.signal });
+        clearTimeout(to);
+        return res;
+      } catch (e: any) {
+        clearTimeout(to);
+        lastErr = e;
+        const status = (e && (e.status ?? e.response?.status)) as number | undefined;
+        const code = e?.code as string | undefined;
+        const msg = e?.message ? String(e.message) : "";
+        const retriable =
+          (typeof status === "number" && status >= 500) ||
+          !status ||
+          (code && [
+            "ECONNRESET",
+            "ETIMEDOUT",
+            "ENOTFOUND",
+            "EAI_AGAIN",
+            "ECONNREFUSED",
+            "UND_ERR_CONNECT_TIMEOUT",
+          ].includes(code)) ||
+          /network|fetch failed|aborted|timeout/i.test(msg || "");
+        if (attempt < maxAttempts && retriable) {
+          logger.appendJSON({ type: "retry", at: nowIso(), attempt: attempt + 1, reason: msg || code || status });
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastErr;
+  };
+
   logger.appendJSON({ type: "model_request", at: nowIso(), model, phase: "initial" });
 
   // Pierwsze wywołanie: system + user
-  let response = await openai.responses.create({
+  let response = await requestWithRetry({
     model,
     tools: tools.getToolSpecs() as any,
     input: [
@@ -147,16 +189,45 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
 
   let toolCallsUsed = 0;
 
+  const summarizeOutputItems = (items: any[]) => {
+    return items.map((it) => {
+      const out: any = { type: it?.type };
+      if (it?.type === "function_call") {
+        out.name = it?.name;
+        const arg = it?.arguments;
+        const raw = typeof arg === "string" ? arg : JSON.stringify(arg ?? {});
+        out.arguments_preview = (raw ?? "").slice(0, 200);
+      } else if (it?.type === "message") {
+        out.role = it?.role;
+        const c = it?.content ?? "";
+        out.content_preview = (typeof c === "string" ? c : JSON.stringify(c)).slice(0, 200);
+      } else if (it) {
+        out.preview = JSON.stringify(it).slice(0, 200);
+      }
+      return out;
+    });
+  };
+
   while (true) {
     const outputItems: any[] = (response as any).output ?? [];
 
-    logger.appendJSON({
-      type: "model_response",
-      at: nowIso(),
-      id: (response as any).id,
-      output_text: (response as any).output_text ?? "",
-      output: outputItems,
-    });
+    if (debug) {
+      logger.appendJSON({
+        type: "model_response",
+        at: nowIso(),
+        id: (response as any).id,
+        output_text: (response as any).output_text ?? "",
+        output: outputItems,
+      });
+    } else {
+      logger.appendJSON({
+        type: "model_response",
+        at: nowIso(),
+        id: (response as any).id,
+        output_text: (response as any).output_text ?? "",
+        output_summary: summarizeOutputItems(outputItems),
+      });
+    }
 
     const functionCalls = outputItems.filter((it) => it?.type === "function_call");
 
@@ -222,7 +293,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
       followup_items: nextInput.length,
     });
 
-    response = await openai.responses.create({
+    response = await requestWithRetry({
       model,
       tools: tools.getToolSpecs() as any,
       previous_response_id: (response as any).id,
