@@ -46,21 +46,18 @@ function safeGitDiff(repoRoot: string): { ok: boolean; diff?: string; error?: st
   return { ok: true, diff: res.stdout ?? "" };
 }
 
-function buildSystemPrompt() {
-  return [
-    "Jesteś agentem do edycji repozytorium poprzez narzędzia (tool calling).",
-    "",
-    "ZASADY:",
-    "- Zawsze używaj read_file zanim zmodyfikujesz plik.",
-    "- Minimalizuj zmiany (unikaj masowego reformatowania).",
-    "- Przy write_file podawaj pełną nową zawartość pliku.",
-    "- NIE wykonuj poleceń systemowych. Do dyspozycji masz tylko narzędzia.",
-    "- Pracujesz wyłącznie w obrębie repo wskazanego przez --repo; path traversal jest zabroniony.",
-    "- Nie czytaj ani nie zapisuj denylistowanych ścieżek (.git/, node_modules/, dist/, .env, *.pem, *.key).",
-    "- Jeśli potrzebujesz znaleźć coś w kodzie, użyj search_in_files albo list_files + read_file.",
-    "",
-    "CEL: zrealizuj zadanie użytkownika poprzez serię wywołań narzędzi.",
-  ].join("\n");
+function buildSystemPrompt(repoRoot: string) {
+  // Zawsze wczytuj prompt z pliku: resources/promts/system-prompt.txt (relatywnie do repoRoot)
+  const promptPath = path.join(repoRoot, "resources", "promts", "codeAgentPromt.txt");
+  if (!fs.existsSync(promptPath)) {
+    throw new Error(`Brak pliku promptu: ${promptPath}`);
+  }
+  const content = fs.readFileSync(promptPath, "utf8");
+  const normalized = (content ?? "").replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    throw new Error(`Plik promptu jest pusty: ${promptPath}`);
+  }
+  return normalized;
 }
 
 /**
@@ -134,7 +131,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
     model,
     tools: tools.getToolSpecs() as any,
     input: [
-      { role: "system", content: buildSystemPrompt() },
+      { role: "system", content: buildSystemPrompt(repoRoot) },
       { role: "user", content: task },
     ],
   });
