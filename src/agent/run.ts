@@ -136,42 +136,73 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
   const tools = new RepoTools({ ...(sandbox as any), baselinePath } as any);
 
   // Pomocnicze: timeout + retry dla wywołań OpenAI
-  const requestWithRetry = async (args: any): Promise<any> => {
+  const requestWithRetry = async (args: any, timeoutMs: number): Promise<any> => {
     const maxAttempts = 3;
-    const timeoutMs = 60_000;
     let lastErr: any;
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), timeoutMs);
+
       try {
-        const res = await (openai.responses.create as any)(args, { signal: ctrl.signal });
-        clearTimeout(to);
+        const res = await openai.responses.create({
+          ...args,
+          signal: ctrl.signal,
+        } as any);
         return res;
       } catch (e: any) {
-        clearTimeout(to);
         lastErr = e;
+
         const status = (e && (e.status ?? e.response?.status)) as number | undefined;
         const code = e?.code as string | undefined;
+        const name = e?.name as string | undefined;
         const msg = e?.message ? String(e.message) : "";
-        const retriable =
-          (typeof status === "number" && status >= 500) ||
-          !status ||
-          (code && [
-            "ECONNRESET",
-            "ETIMEDOUT",
-            "ENOTFOUND",
-            "EAI_AGAIN",
-            "ECONNREFUSED",
-            "UND_ERR_CONNECT_TIMEOUT",
-          ].includes(code)) ||
-          /network|fetch failed|aborted|timeout/i.test(msg || "");
+
+        const isAbort =
+          name === "AbortError" ||
+          /aborted|abort/i.test(msg);
+
+        const isRetriableStatus =
+          typeof status === "number" && (status === 429 || status >= 500);
+
+        const isRetriableNetwork =
+          (code &&
+            [
+              "ECONNRESET",
+              "ETIMEDOUT",
+              "ENOTFOUND",
+              "EAI_AGAIN",
+              "ECONNREFUSED",
+              "UND_ERR_CONNECT_TIMEOUT",
+            ].includes(code)) ||
+          /network|fetch failed|timeout/i.test(msg);
+
+        const retriable = isAbort || isRetriableStatus || isRetriableNetwork;
+
+        logger.appendJSON({
+          type: "openai_request_error",
+          at: nowIso(),
+          attempt,
+          max_attempts: maxAttempts,
+          timeout_ms: timeoutMs,
+          status,
+          code,
+          name,
+          message: msg.slice(0, 500),
+          retriable,
+        });
+
         if (attempt < maxAttempts && retriable) {
-          logger.appendJSON({ type: "retry", at: nowIso(), attempt: attempt + 1, reason: msg || code || status });
+          await new Promise((r) => setTimeout(r, 250 * attempt));
           continue;
         }
+
         throw e;
+      } finally {
+        clearTimeout(to);
       }
     }
+
     throw lastErr;
   };
 
@@ -185,7 +216,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
       { role: "system", content: buildSystemPrompt(repoRoot) },
       { role: "user", content: task },
     ],
-  });
+  }, 180_000);
 
   let toolCallsUsed = 0;
 
@@ -298,7 +329,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<void> {
       tools: tools.getToolSpecs() as any,
       previous_response_id: (response as any).id,
       input: nextInput,
-    });
+    }, 240_000);
   }
 
   // Po zakończeniu agent loop: generujemy lokalnie agent.diff.txt (bez udziału modelu)
