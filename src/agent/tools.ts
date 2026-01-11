@@ -21,6 +21,7 @@ export type ToolName =
   | "list_changed_files"
   | "read_file_original"
   | "diff_file_against_original"
+  | "diff_file_against_current"
   | "apply_patch";
 
 export type ToolCall = {
@@ -220,6 +221,22 @@ export class RepoTools {
       },
       {
         type: "function",
+        name: "diff_file_against_current",
+        description:
+          "Compute a unified diff between CURRENT file content and the PROVIDED proposed_content (does not write). Returns diff_text matching buildUnifiedDiff format.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            path: { type: "string", description: "Relative path inside repo." },
+            proposed_content: { type: "string", description: "Proposed new full file content to compare against current." },
+            max_lines: { type: "integer", description: "Max diff lines to include in output (default 2000).", minimum: 1, maximum: 10000 },
+          },
+          required: ["path", "proposed_content"],
+        },
+      },
+      {
+        type: "function",
         name: "apply_patch",
         description:
           "Apply a simple unified patch (without hunk headers) to one or more files. The format must match output of diff_file_against_original (lines starting with '--- a/', '+++ b/' followed by lines prefixed with space, '+' or '-'). Requires prior read_file for every existing file being modified.",
@@ -260,6 +277,8 @@ export class RepoTools {
           return { ok: true, result: this.readFileOriginal(call.arguments) };
         case "diff_file_against_original":
           return { ok: true, result: this.diffFileAgainstOriginal(call.arguments) };
+        case "diff_file_against_current":
+          return { ok: true, result: this.diffFileAgainstCurrent(call.arguments) };
         case "apply_patch":
           return { ok: true, result: this.applyPatch(call.arguments) };
         default:
@@ -686,6 +705,32 @@ export class RepoTools {
       },
       diff_text: diff,
     };
+  }
+
+  private diffFileAgainstCurrent(args: { path: string; proposed_content: string; max_lines?: number }) {
+    const { absPath, relPath } = resolveInRepo(this.opts, args.path);
+
+    const exists = fs.existsSync(absPath) && fs.statSync(absPath).isFile();
+    const currentContent = exists ? this.safeRead(absPath, this.opts.maxReadBytes) : "";
+    const proposed = (args.proposed_content ?? "").toString();
+
+    const maxLines = Math.min(Math.max(args.max_lines ?? 2000, 1), 10000);
+
+    const curLines = currentContent.split(/\r?\n/);
+    const propLines = proposed.split(/\r?\n/);
+
+    if (curLines.length + propLines.length > LCS_MAX_TOTAL_LINES) {
+      const header = [
+        `--- a/${relPath}`,
+        `+++ b/${relPath}`,
+        `@@ DIFF OMITTED: total line limit exceeded (${curLines.length + propLines.length} > ${LCS_MAX_TOTAL_LINES}) @@`,
+      ].join("\n");
+      return { path: relPath, diff_text: header };
+    }
+
+    const ops = this.diffLines(curLines, propLines);
+    const diff = this.buildUnifiedDiff(relPath, curLines, propLines, maxLines, ops);
+    return { path: relPath, diff_text: diff };
   }
 
   private safeRead(absPath: string, limit: number): string {
