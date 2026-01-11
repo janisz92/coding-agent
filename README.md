@@ -92,6 +92,33 @@ Zdefiniowane w package.json:
 npm test
 ```
 
+## Jak robić review zmian (code review z użyciem narzędzi)
+Agent automatycznie tworzy snapshot bazowy repozytorium na starcie (plik .agent_baseline.json). Na jego podstawie dostępne są narzędzia do przeglądu zmian:
+- get_baseline_info – sprawdzenie informacji o snapshotcie,
+- list_changed_files – lista plików added/modified/deleted względem snapshotu,
+- diff_file_against_original – unified diff oraz podsumowanie (ile linii dodano/uszono),
+- read_file_original – odczyt oryginalnej wersji pliku ze snapshotu (dla porównań punktowych).
+
+Przykładowa procedura przeglądu przez agenta:
+1) Uruchom agenta z odpowiednim poleceniem (tryb "edit") i poproś o przygotowanie raportu z review. Np.:
+
+```
+npm run dev -- edit "Zrób code review zmian w repo. Użyj list_changed_files i diff_file_against_original do wygenerowania przeglądu; zapisz czytelne podsumowanie z rekomendacjami do pliku REVIEW.md." --repo .
+```
+
+2) Agent wykorzysta narzędzia review i zapisze raport (np. REVIEW.md). Dodatkowo w pliku agent.diff.txt znajdziesz wynik git diff względem HEAD.
+
+Wskazówki do promptu (opcjonalnie):
+- Ogranicz zakres, np. do ścieżki: „Przejrzyj tylko src/” – agent może użyć list_changed_files z prefix: "src/".
+- Wymuś czytelny format raportu (sekcje: lista zmian, komentarze, ryzyka, rekomendacje).
+- Poproś o propozycje konkretnych poprawek wraz ze wskazaniem plików/fragmentów.
+- Ustal limity, np. maks. 1000 linii diffu na plik (parametr max_lines w diff_file_against_original).
+
+Ograniczenia i uwagi dla review:
+- Pliki większe niż maxReadBytes (domyślnie 400 kB) w snapshotcie nie mają zapisanej treści – porównanie odbywa się po rozmiarze, a diff treści nie będzie dostępny.
+- Denylista ścieżek (np. .git/, node_modules/, dist/, .env) jest zawsze respektowana – te zasoby nie są analizowane.
+- Jeśli repozytorium nie jest repozytorium git lub git diff zwróci błąd, agent.diff.txt nie zostanie wygenerowany.
+
 ## Uwagi
 - Domyślny model to wartość z OPENAI_MODEL lub "gpt-5". Upewnij się, że wskazany model wspiera tool-calling i Responses API.
 - Agent minimalizuje zakres zmian i wymaga wywołania read_file przed modyfikacją jakiegokolwiek pliku.
