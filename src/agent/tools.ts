@@ -307,24 +307,35 @@ export class RepoTools {
     for (const rel of all) {
       if (matches.length >= limitMatches) break;
 
-      const abs = path.resolve(this.opts.repoRoot, rel.replaceAll("/", path.sep));
+      // Resolve safely within the repo (guards against symlink escape)
+      let absPath: string;
+      let relPath: string;
+      try {
+        const r = resolveInRepo(this.opts, rel);
+        absPath = r.absPath;
+        relPath = r.relPath;
+      } catch {
+        // Skip files that cannot be safely resolved
+        continue;
+      }
+
       let st: fs.Stats;
       try {
-        st = fs.statSync(abs);
+        st = fs.statSync(absPath);
       } catch {
         continue;
       }
       if (!st.isFile()) continue;
       if (st.size > this.opts.maxReadBytes) continue;
 
-      const content = fs.readFileSync(abs, "utf8");
+      const content = fs.readFileSync(absPath, "utf8");
       if (!content.includes(query)) continue;
 
       const lines = content.split(/\r?\n/);
       for (let i = 0; i < lines.length; i++) {
         if (matches.length >= limitMatches) break;
         if (lines[i].includes(query)) {
-          matches.push({ path: rel, line: i + 1, text: lines[i].slice(0, 400) });
+          matches.push({ path: relPath, line: i + 1, text: lines[i].slice(0, 400) });
         }
       }
     }
